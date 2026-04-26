@@ -57,7 +57,7 @@ st.markdown("""
     <span class="header-icon">&#128202;</span>
     <div>
         <h1>Relatório Financeiro da Produção</h1>
-        <p>Análise automática gerada a partir do Cabeçalho da Nota — Sankhya</p>
+        <p>Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
