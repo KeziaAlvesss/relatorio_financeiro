@@ -4,6 +4,13 @@ import plotly.graph_objects as go
 import io
 import os
 from datetime import datetime
+import base64
+
+def get_image_base64(path):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    full_path = os.path.join(base_dir, path)
+    with open(full_path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
 st.set_page_config(
     page_title="Financeiro PCP | Bonsono",
@@ -21,13 +28,27 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .stApp { background: #f7f8fc; }
 .page-header {
     background: linear-gradient(135deg, #0f2942 0%, #1a4a7a 60%, #1e6fbf 100%);
-    border-radius: 16px; padding: 36px 40px; margin-bottom: 32px;
-    display: flex; align-items: center; gap: 20px;
+    border-radius: 16px; padding: 32px 40px; margin-bottom: 32px;
+    display: flex; align-items: center; gap: 24px;
     box-shadow: 0 8px 32px rgba(15,41,66,0.18);
 }
-.page-header h1 { font-family: 'Inter', sans-serif; font-size: 2rem; font-weight: 800; color: #fff; margin: 0; letter-spacing: -0.5px; }
-.page-header p  { color: #a8c8f0; margin: 4px 0 0 0; font-size: 0.88rem; font-weight: 300; }
-.header-icon    { font-size: 2.6rem; }
+.header-logo {
+    height: 64px; width: 64px; object-fit: contain;
+    background: #fff; border-radius: 12px;
+    padding: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    flex-shrink: 0;
+}
+.page-header h1 {
+    font-family: 'Inter', sans-serif; font-size: 2rem;
+    font-weight: 800; color: #fff; margin: 0;
+    letter-spacing: -0.5px; line-height: 1.2;
+}
+.page-header .subtitle {
+    color: #a8c8f0;
+    font-size: 0.85rem; font-weight: 300;
+    border-top: 1px solid rgba(255,255,255,0.15);
+    padding-top: 6px; margin-top: 6px;
+}
 .upload-label   { font-family: 'Inter', sans-serif; font-size: 0.78rem; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: #6b7a99; margin-bottom: 8px; display: block; }
 .kpi-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 16px; margin: 24px 0; }
 .kpi-card { background: #fff; border-radius: 14px; padding: 22px 20px 18px 20px; box-shadow: 0 2px 12px rgba(15,41,66,0.07); position: relative; overflow: hidden; }
@@ -52,12 +73,14 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
+logo_b64 = get_image_base64("logo-bonsono.png")
+
+st.markdown(f"""
 <div class="page-header">
-    <span class="header-icon">&#128202;</span>
+    <img class="header-logo" src="data:image/png;base64,{logo_b64}" />
     <div>
         <h1>Relatório Financeiro da Produção</h1>
-        <p>Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
+        <p class="subtitle">📡 Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -66,8 +89,13 @@ st.markdown("""
 def format_brl(value):
     return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+import re
+
 def is_boleto(tipo):
-    return "DIAS" in str(tipo).upper() if pd.notna(tipo) else False
+    if not pd.notna(tipo):
+        return False
+    t = str(tipo).upper()
+    return bool("DIAS" in t or "GRANDES REDES" in t or re.search(r'\d+/\d+', t))
 
 def is_a_vista(tipo):
     t = str(tipo).upper()
@@ -95,10 +123,8 @@ def calcular_totais(df):
     }, df
 
 def carregar_historico():
-    """Sempre retorna data como string 'YYYY-MM-DD' para evitar conflitos de tipo."""
     if os.path.exists(HISTORICO_PATH):
         df = pd.read_csv(HISTORICO_PATH, dtype={"data": str})
-        # Normaliza qualquer formato de data para YYYY-MM-DD string
         df["data"] = pd.to_datetime(df["data"]).dt.strftime("%Y-%m-%d")
         return df
     return pd.DataFrame(columns=["data", "total_geral", "total_assistencia",
@@ -114,6 +140,7 @@ def salvar_historico(data_ref, totais):
     hist = pd.concat([hist, nova], ignore_index=True).sort_values("data")
     hist.to_csv(HISTORICO_PATH, index=False)
     return True
+
 
 # ── Abas ──────────────────────────────────────────────────────────────────────
 aba_hoje, aba_historico = st.tabs(["📋 Relatório do Dia", "📅 Histórico"])
@@ -303,6 +330,84 @@ with aba_hoje:
                 "Descrição (Tipo de Negociação)": "Tipo Neg.", "Apelido (Vendedor)": "Vendedor"
             }), use_container_width=True, hide_index=True)
 
+            # ── Tabela Completa de Pedidos ──
+            st.markdown('<div class="sec-title">&#128203; Todos os Pedidos da Produção</div>', unsafe_allow_html=True)
+
+            col_f1, col_f2, col_f3, col_f4 = st.columns([2, 2, 2, 2])
+            with col_f1:
+                busca = st.text_input("🔍 Buscar parceiro / nota", placeholder="Ex: Magazine, 64761...")
+            with col_f2:
+                regioes = ["Todas"] + sorted(df["Regiao Vendedor"].dropna().unique().tolist())
+                filtro_regiao = st.selectbox("Região", regioes)
+            with col_f3:
+                operacoes = ["Todas"] + sorted(df["Descrição (Tipo de Operação)"].dropna().unique().tolist())
+                filtro_op = st.selectbox("Tipo de Operação", operacoes)
+            with col_f4:
+                negociacoes = ["Todas"] + sorted(df["Descrição (Tipo de Negociação)"].dropna().unique().tolist())
+                filtro_neg = st.selectbox("Tipo de Negociação", negociacoes)
+
+            # Aplicar filtros
+            df_tabela = df.copy()
+
+            if busca:                                                          # ← CORREÇÃO: df_tabela filtrado DENTRO do if
+                mask_busca = (
+                    df_tabela["Nome Parceiro (Parceiro)"].str.contains(busca, case=False, na=False) |
+                    df_tabela["Nro. Nota"].astype(str).str.contains(busca, case=False, na=False) |
+                    df_tabela["Ordem de Compra"].astype(str).str.contains(busca, case=False, na=False)
+                )
+                df_tabela = df_tabela[mask_busca]                              # ← estava fora do if, causando o erro
+
+            if filtro_regiao != "Todas":
+                df_tabela = df_tabela[df_tabela["Regiao Vendedor"] == filtro_regiao]
+
+            if filtro_op != "Todas":
+                df_tabela = df_tabela[df_tabela["Descrição (Tipo de Operação)"] == filtro_op]
+
+            if filtro_neg != "Todas":
+                df_tabela = df_tabela[df_tabela["Descrição (Tipo de Negociação)"] == filtro_neg]
+
+            # Montar tabela final
+            df_exibir = df_tabela[[
+                "Nro. Nota",
+                "Dt. Neg.",
+                "Nome Parceiro (Parceiro)",
+                "Vlr. Nota",
+                "Descrição (Tipo de Negociação)",
+                "Descrição (Tipo de Operação)",
+                "Apelido (Vendedor)",
+                "Regiao Vendedor",
+                "Ordem de Compra",
+                "Previsão de entrega",
+                "Análise Financeira",
+                "Status NF-e",
+            ]].copy()
+
+            df_exibir["Dt. Neg."] = pd.to_datetime(df_exibir["Dt. Neg."], errors="coerce").dt.strftime("%d/%m/%Y")
+            df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+            df_exibir["Vlr. Nota"] = df_exibir["Vlr. Nota"].map(format_brl)
+
+            st.caption(f"Exibindo **{len(df_exibir)}** pedido(s) de **{len(df)}** no total")
+
+            st.dataframe(
+                df_exibir.rename(columns={
+                    "Nro. Nota": "Nota",
+                    "Dt. Neg.": "Data",
+                    "Nome Parceiro (Parceiro)": "Parceiro",
+                    "Vlr. Nota": "Valor",
+                    "Descrição (Tipo de Negociação)": "Negociação",
+                    "Descrição (Tipo de Operação)": "Operação",
+                    "Apelido (Vendedor)": "Vendedor",
+                    "Regiao Vendedor": "Região",
+                    "Ordem de Compra": "OC",
+                    "Previsão de entrega": "Prev. Entrega",
+                    "Análise Financeira": "Fin.",
+                    "Status NF-e": "NF-e",
+                }),
+                use_container_width=True,
+                hide_index=True,
+                height=420,
+            )
+
             # ── Export ──
             st.markdown('<div class="sec-title">&#11015;&#65039; Exportar</div>', unsafe_allow_html=True)
             categorias_export = ["Total Geral", "Assist\u00eancia", "Lojas", "\u00c0 Vista", "Boleto (com dias)", "Comercial"]
@@ -350,7 +455,6 @@ with aba_historico:
     if hist.empty:
         st.info("Nenhum histórico ainda. Faça upload de relatórios e clique em **Salvar no histórico** na aba anterior.")
     else:
-        # data já é string "YYYY-MM-DD" — converte só para ordenar/filtrar
         hist["data_dt"] = pd.to_datetime(hist["data"], format="%Y-%m-%d")
         hist_sorted = hist.sort_values("data_dt")
 
