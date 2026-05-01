@@ -5,12 +5,29 @@ import io
 import os
 from datetime import datetime
 import base64
+import hashlib
+import json
 
+# ✅ DEPOIS (funciona com ou sem secrets.toml):
+def _get_app_url():
+    """Obtém APP_URL de secrets ou usa fallback"""
+    try:
+        if hasattr(st, "secrets") and st.secrets and "APP_URL" in st.secrets:
+            return st.secrets["APP_URL"]
+    except:
+        pass
+    return "https://relatoriofinanceiro-ua9w8bfoe6ajqu6ynauset.streamlit.app"
+
+APP_URL = _get_app_url()
+
+# ── CONFIGURAÇÃO INICIAL ──────────────────────────────────────────────────────
 def get_image_base64(path):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     full_path = os.path.join(base_dir, path)
-    with open(full_path, "rb") as f:
-        return base64.b64encode(f.read()).decode()
+    if os.path.exists(full_path):
+        with open(full_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    return ""
 
 st.set_page_config(
     page_title="Financeiro PCP | Bonsono",
@@ -20,7 +37,9 @@ st.set_page_config(
 )
 
 HISTORICO_PATH = "historico_financeiro.csv"
+REPRESENTANTES_DB = "representantes.csv"
 
+# ── CSS ESTILIZADO ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
@@ -70,24 +89,31 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .info-box { background: #eef4ff; border-left: 4px solid #2980b9; border-radius: 10px; padding: 16px 20px; color: #1a3a5c; font-size: 0.88rem; line-height: 1.8; }
 .saved-badge   { background: #d4edda; color: #155724; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; display: inline-block; margin-top: 8px; }
 .already-badge { background: #fff3cd; color: #856404; border-radius: 8px; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; display: inline-block; margin-top: 8px; }
+.rep-banner {
+    background: linear-gradient(135deg, #1a4a7a, #2980b9);
+    color: white; padding: 12px 20px; border-radius: 10px;
+    margin: 16px 0; display: flex; align-items: center; gap: 12px;
+}
+.rep-banner i { font-size: 1.2rem; }
+.readonly-badge {
+    background: #fff3cd; color: #856404; padding: 4px 12px;
+    border-radius: 20px; font-size: 0.75rem; font-weight: 600;
+}
+.debug-box {
+    background: #fff3cd; border: 1px solid #ffc107;
+    border-radius: 8px; padding: 12px; font-size: 0.8rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
 logo_b64 = get_image_base64("logo-bonsono.png")
 
-st.markdown(f"""
-<div class="page-header">
-    <img class="header-logo" src="data:image/png;base64,{logo_b64}" />
-    <div>
-        <h1>Relatório Financeiro da Produção</h1>
-        <p class="subtitle">📡 Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── HELPERS DE FORMATAÇÃO E LÓGICA ────────────────────────────────────────────
 def format_brl(value):
-    return f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try:
+        return f"R$ {float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except:
+        return "R$ 0,00"
 
 import re
 
@@ -122,6 +148,7 @@ def calcular_totais(df):
         "qtd_notas":         len(df),
     }, df
 
+# ── GERENCIAMENTO DE HISTÓRICO ────────────────────────────────────────────────
 def carregar_historico():
     if os.path.exists(HISTORICO_PATH):
         df = pd.read_csv(HISTORICO_PATH, dtype={"data": str})
@@ -141,14 +168,238 @@ def salvar_historico(data_ref, totais):
     hist.to_csv(HISTORICO_PATH, index=False)
     return True
 
+# ── GERENCIAMENTO DE REPRESENTANTES (PERSISTENTE VIA SECRETS) ─────────────────
+def carregar_representantes_secrets():
+    """Carrega representantes de st.secrets (persistente no Streamlit Cloud)"""
+    reps = {}
+    try:
+        # Verifica se secrets existe e tem a chave 'representantes'
+        if not hasattr(st, "secrets") or not st.secrets:
+            return reps
+        if "representantes" not in st.secrets:
+            return reps
+            
+        for token, dados in st.secrets["representantes"].items():
+            if isinstance(dados, str) and "|" in dados:
+                partes = dados.split("|")
+                if len(partes) >= 2:
+                    nome, regioes = partes[0], partes[1]
+                    reps[token] = {
+                        "nome": nome.strip(),
+                        "regioes": [r.strip() for r in regioes.split(";") if r.strip()],
+                        "ativo": True,
+                        "fonte": "secrets"
+                    }
+    except Exception as e:
+        # Silenciosamente retorna vazio se não houver secrets
+        pass
+    return reps
 
-# ── Abas ──────────────────────────────────────────────────────────────────────
+def salvar_representantes_csv(token, nome, regioes_str):
+    """Salva representante em CSV (fallback para desenvolvimento local)"""
+    if os.path.exists(REPRESENTANTES_DB):
+        try:
+            df = pd.read_csv(REPRESENTANTES_DB)
+        except:
+            df = pd.DataFrame(columns=["token", "nome", "regioes", "ativo"])
+    else:
+        df = pd.DataFrame(columns=["token", "nome", "regioes", "ativo"])
+    
+    novo = pd.DataFrame([{
+        "token": token, "nome": nome, 
+        "regioes": regioes_str, "ativo": True
+    }])
+    
+    if not df.empty and token in df["token"].values:
+        df = df[df["token"] != token]
+    
+    df = pd.concat([df, novo], ignore_index=True)
+    df.to_csv(REPRESENTANTES_DB, index=False)
+    return True
+
+def carregar_representantes_csv():
+    """Carrega representantes do CSV (fallback local)"""
+    reps = {}
+    if os.path.exists(REPRESENTANTES_DB):
+        try:
+            df = pd.read_csv(REPRESENTANTES_DB)
+            for _, row in df.iterrows():
+                if pd.notna(row["token"]):
+                    regioes = row["regioes"].split(";") if pd.notna(row["regioes"]) else []
+                    reps[row["token"]] = {
+                        "nome": row["nome"],
+                        "regioes": [r.strip() for r in regioes if r.strip()],
+                        "ativo": bool(row.get("ativo", True)),
+                        "fonte": "csv"
+                    }
+        except Exception as e:
+            st.warning(f"⚠️ Erro ao carregar CSV: {e}")
+    return reps
+
+def validar_token(token):
+    """Valida token buscando em secrets (Cloud) ou CSV (local)"""
+    if not token:
+        return None
+    
+    # 1º: Tenta buscar em st.secrets (produção Cloud)
+    reps_secrets = carregar_representantes_secrets()
+    if token in reps_secrets and reps_secrets[token]["ativo"]:
+        return reps_secrets[token]
+    
+    # 2º: Fallback para CSV (desenvolvimento local)
+    reps_csv = carregar_representantes_csv()
+    if token in reps_csv and reps_csv[token]["ativo"]:
+        return reps_csv[token]
+    
+    return None
+
+def gerar_token(nome, senha_admin="bonsono2024"):
+    """Gera token único baseado em nome + senha + timestamp"""
+    raw = f"{nome}:{senha_admin}:{datetime.now().isoformat()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+# ── VIEW READ-ONLY PARA REPRESENTANTES ────────────────────────────────────────
+def visualizar_view_representante(df, representante, data_filtro=None):
+    st.markdown(f"""
+    <div class="rep-banner">
+        <span>👤</span>
+        <div>
+            <strong>Área do Representante</strong><br>
+            <small>{representante['nome']} • Visualização consultiva</small>
+        </div>
+        <span class="readonly-badge">🔒 Somente leitura</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Filtro por região do representante
+    if representante["regioes"]:
+        df = df[df["Regiao Vendedor"].isin(representante["regioes"])].copy()
+    
+    # Filtro por data se especificado na URL
+    if data_filtro:
+        try:
+            df["Dt. Neg."] = pd.to_datetime(df["Dt. Neg."], errors="coerce")
+            df = df[df["Dt. Neg."].dt.strftime("%Y-%m-%d") == data_filtro]
+        except Exception as e:
+            st.warning(f"⚠️ Data inválida: {data_filtro}")
+    
+    # KPIs resumidos
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📋 Pedidos", len(df))
+    with col2:
+        st.metric("💰 Valor Total", format_brl(df["Vlr. Nota"].sum()))
+    with col3:
+        medio = df["Vlr. Nota"].mean() if len(df) > 0 else 0
+        st.metric("🎫 Ticket Médio", format_brl(medio))
+    
+    # Tabela com colunas essenciais (sem dados sensíveis)
+    cols_exibir = [
+        "Nro. Nota", "Dt. Neg.", "Nome Parceiro (Parceiro)", 
+        "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor",
+        "Previsão de entrega", "Status NF-e"
+    ]
+    
+    cols_disponiveis = [c for c in cols_exibir if c in df.columns]
+    df_exibir = df[cols_disponiveis].copy()
+    
+    # Formatação
+    if "Dt. Neg." in df_exibir.columns:
+        df_exibir["Dt. Neg."] = pd.to_datetime(df_exibir["Dt. Neg."], errors="coerce").dt.strftime("%d/%m/%Y")
+    if "Previsão de entrega" in df_exibir.columns:
+        df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+    if "Vlr. Nota" in df_exibir.columns:
+        df_exibir["Vlr. Nota"] = df_exibir["Vlr. Nota"].map(format_brl)
+    
+    # Renomear colunas para exibição amigável
+    rename_map = {
+        "Nro. Nota": "Nota", "Dt. Neg.": "Data", 
+        "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor",
+        "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região",
+        "Previsão de entrega": "Prev. Entrega", "Status NF-e": "Status"
+    }
+    df_exibir = df_exibir.rename(columns={k: v for k, v in rename_map.items() if k in df_exibir.columns})
+    
+    st.dataframe(df_exibir, use_container_width=True, hide_index=True, height=500)
+    
+    # Exportação limitada
+    if len(df_exibir) > 0:
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_exibir.to_excel(writer, sheet_name="Meus Pedidos", index=False)
+        
+        nome_arquivo = f"pedidos_{representante['nome'].split()[0]}_{data_filtro or 'todos'}.xlsx"
+        st.download_button(
+            label="⬇️ Exportar meus pedidos (Excel)",
+            data=buffer.getvalue(),
+            file_name=nome_arquivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+# ── HEADER COM LOGO ───────────────────────────────────────────────────────────
+st.markdown(f"""
+<div class="page-header">
+    <img class="header-logo" src="data:image/png;base64,{logo_b64}" />
+    <div>
+        <h1>Relatório Financeiro da Produção</h1>
+        <p class="subtitle">📡 Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── PARÂMETROS DA URL E AUTH ──────────────────────────────────────────────────
+query_params = st.query_params
+token_rep = query_params.get("token")
+data_filtro_url = query_params.get("data")
+
+representante_logado = None
+if token_rep:
+    representante_logado = validar_token(token_rep)
+    if representante_logado:
+        st.sidebar.success(f"✅ Acesso: {representante_logado['nome']}")
+        if representante_logado.get("fonte"):
+            st.sidebar.caption(f"Fonte: {representante_logado['fonte']}")
+    else:
+        st.sidebar.error("❌ Token inválido ou expirado")
+        # Debug info
+        with st.sidebar.expander("🔍 Debug"):
+            st.write("Token recebido:", token_rep)
+            st.write("Representantes em secrets:", list(carregar_representantes_secrets().keys()))
+            st.write("Representantes em CSV:", list(carregar_representantes_csv().keys()))
+
+# ── DEBUG MODE (opcional, remova em produção) ─────────────────────────────────
+if "debug" in query_params:
+    with st.expander("🔧 DEBUG MODE", expanded=True):
+        st.markdown('<div class="debug-box">', unsafe_allow_html=True)
+        st.write("**Query params:**", dict(query_params))
+        st.write("**Token válido?**", validar_token(token_rep) is not None)
+        st.write("**APP_URL:**", APP_URL)
+        st.write("**Representantes (secrets):**", carregar_representantes_secrets())
+        st.write("**Representantes (CSV):**", carregar_representantes_csv())
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# ── ABAS PRINCIPAIS ───────────────────────────────────────────────────────────
 aba_hoje, aba_historico = st.tabs(["📋 Relatório do Dia", "📅 Histórico"])
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 1 — RELATÓRIO DO DIA
 # ═════════════════════════════════════════════════════════════════════════════
+uploaded_file = None 
 with aba_hoje:
+    
+    if representante_logado and not uploaded_file:
+        st.info("📁 Faça upload do arquivo do dia para visualizar seus pedidos.")
+        uploaded_file = st.file_uploader("Selecionar arquivo .xlsx do Sankhya", type=["xlsx", "xls"])
+        
+        if uploaded_file:
+            try:
+                df_raw = load_data(uploaded_file)
+                totais, df = calcular_totais(df_raw)
+                visualizar_view_representante(df, representante_logado, data_filtro_url)
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {e}")
+        st.stop()
+    
     st.markdown('<span class="upload-label">&#128194; Selecionar arquivo</span>', unsafe_allow_html=True)
     uploaded_file = st.file_uploader("", type=["xlsx", "xls"], label_visibility="collapsed")
 
@@ -346,16 +597,15 @@ with aba_hoje:
                 negociacoes = ["Todas"] + sorted(df["Descrição (Tipo de Negociação)"].dropna().unique().tolist())
                 filtro_neg = st.selectbox("Tipo de Negociação", negociacoes)
 
-            # Aplicar filtros
             df_tabela = df.copy()
 
-            if busca:                                                          # ← CORREÇÃO: df_tabela filtrado DENTRO do if
+            if busca:
                 mask_busca = (
                     df_tabela["Nome Parceiro (Parceiro)"].str.contains(busca, case=False, na=False) |
                     df_tabela["Nro. Nota"].astype(str).str.contains(busca, case=False, na=False) |
                     df_tabela["Ordem de Compra"].astype(str).str.contains(busca, case=False, na=False)
                 )
-                df_tabela = df_tabela[mask_busca]                              # ← estava fora do if, causando o erro
+                df_tabela = df_tabela[mask_busca]
 
             if filtro_regiao != "Todas":
                 df_tabela = df_tabela[df_tabela["Regiao Vendedor"] == filtro_regiao]
@@ -366,20 +616,11 @@ with aba_hoje:
             if filtro_neg != "Todas":
                 df_tabela = df_tabela[df_tabela["Descrição (Tipo de Negociação)"] == filtro_neg]
 
-            # Montar tabela final
             df_exibir = df_tabela[[
-                "Nro. Nota",
-                "Dt. Neg.",
-                "Nome Parceiro (Parceiro)",
-                "Vlr. Nota",
-                "Descrição (Tipo de Negociação)",
-                "Descrição (Tipo de Operação)",
-                "Apelido (Vendedor)",
-                "Regiao Vendedor",
-                "Ordem de Compra",
-                "Previsão de entrega",
-                "Análise Financeira",
-                "Status NF-e",
+                "Nro. Nota", "Dt. Neg.", "Nome Parceiro (Parceiro)", "Vlr. Nota",
+                "Descrição (Tipo de Negociação)", "Descrição (Tipo de Operação)",
+                "Apelido (Vendedor)", "Regiao Vendedor", "Ordem de Compra",
+                "Previsão de entrega", "Análise Financeira", "Status NF-e",
             ]].copy()
 
             df_exibir["Dt. Neg."] = pd.to_datetime(df_exibir["Dt. Neg."], errors="coerce").dt.strftime("%d/%m/%Y")
@@ -390,22 +631,15 @@ with aba_hoje:
 
             st.dataframe(
                 df_exibir.rename(columns={
-                    "Nro. Nota": "Nota",
-                    "Dt. Neg.": "Data",
-                    "Nome Parceiro (Parceiro)": "Parceiro",
-                    "Vlr. Nota": "Valor",
+                    "Nro. Nota": "Nota", "Dt. Neg.": "Data",
+                    "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor",
                     "Descrição (Tipo de Negociação)": "Negociação",
                     "Descrição (Tipo de Operação)": "Operação",
-                    "Apelido (Vendedor)": "Vendedor",
-                    "Regiao Vendedor": "Região",
-                    "Ordem de Compra": "OC",
-                    "Previsão de entrega": "Prev. Entrega",
-                    "Análise Financeira": "Fin.",
-                    "Status NF-e": "NF-e",
+                    "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região",
+                    "Ordem de Compra": "OC", "Previsão de entrega": "Prev. Entrega",
+                    "Análise Financeira": "Fin.", "Status NF-e": "NF-e",
                 }),
-                use_container_width=True,
-                hide_index=True,
-                height=420,
+                use_container_width=True, hide_index=True, height=420,
             )
 
             # ── Export ──
@@ -539,3 +773,102 @@ with aba_historico:
                     hist_full.to_csv(HISTORICO_PATH, index=False)
                     st.success(f"Registro de {data_del} removido.")
                     st.rerun()
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SIDEBAR: GERENCIAMENTO DE REPRESENTANTES (APENAS ADMIN)
+# ═════════════════════════════════════════════════════════════════════════════
+if not representante_logado:
+    with st.sidebar:
+        st.markdown("### 🔐 Área Administrativa")
+        
+        with st.expander("👥 Gerenciar Representantes", expanded=True):
+            # Carregar representantes de ambas as fontes
+            reps_secrets = carregar_representantes_secrets()
+            reps_csv = carregar_representantes_csv()
+            all_reps = {**reps_secrets, **reps_csv}
+            
+            st.info("💡 **Importante:** No Streamlit Cloud, os tokens devem ser configurados em **Settings → Secrets** para persistência. O CSV funciona apenas localmente.")
+            
+            with st.form("novo_rep"):
+                st.markdown("**Cadastrar novo representante**")
+                novo_nome = st.text_input("Nome completo")
+                novo_regioes = st.multiselect(
+                    "Regiões de acesso",
+                    options=["REGIAO 1", "REGIAO 2", "REGIAO 3", "REGIAO 4", "LOJAS", "ATACADO"],
+                    help="Selecione as regiões que este representante poderá visualizar"
+                )
+                submit_rep = st.form_submit_button("Gerar token de acesso")
+                
+                if submit_rep and novo_nome:
+                    token = gerar_token(novo_nome)
+                    regioes_str = ";".join(novo_regioes)
+                    
+                    # Salvar em CSV (fallback local)
+                    salvar_representantes_csv(token, novo_nome, regioes_str)
+                    
+                    # Link com URL REAL
+                    link_representante = f"{APP_URL}/?token={token}"
+                    
+                    st.success(f"✅ Token gerado para {novo_nome}!")
+                    st.markdown("**🔗 Link de acesso do representante:**")
+                    
+                    # Campo copiável
+                    st.text_input(
+                        "📋 Clique para copiar:",
+                        value=link_representante,
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Instruções
+                    with st.expander("📋 Como usar este link"):
+                        st.markdown(f"""
+                        1. Copie o link acima
+                        2. Envie para **{novo_nome}**
+                        3. Ao acessar, ele verá apenas:
+                           - Pedidos das regiões: {', '.join(novo_regioes) if novo_regioes else 'Todas'}
+                           - Tabela consultiva (somente leitura)
+                        4. Para filtrar por data, adicione `&data=AAAA-MM-DD`:
+                           ```
+                           {link_representante}&data=2024-01-15
+                           ```
+                        """)
+                    
+                    # ⚠️ Aviso para Streamlit Cloud
+                    st.warning("⚠️ **Para funcionar no Cloud:** Copie este token e adicione em **Settings → Secrets** do Streamlit Cloud no formato:\n```toml\n[representantes]\n\"{token}\" = \"{nome}|{regioes}\"\n```".format(
+                        token=token, nome=novo_nome, regioes=regioes_str
+                    ))
+                    
+                    # Debug imediato
+                    with st.expander("🔍 Testar token agora"):
+                        teste = validar_token(token)
+                        if teste:
+                            st.success(f"✅ Token válido! {teste['nome']} ({teste['fonte']})")
+                        else:
+                            st.error("❌ Token não encontrado ainda. Adicione em secrets.toml ou aguarde o deploy.")
+            
+            # Lista de representantes existentes
+            if all_reps:
+                st.markdown("---")
+                st.markdown(f"**Representantes cadastrados** ({len(all_reps)}):")
+                
+                for token, rep in all_reps.items():
+                    status = "🟢" if rep["ativo"] else "🔴"
+                    fonte_badge = "🔐 Cloud" if rep.get("fonte") == "secrets" else "💻 Local"
+                    
+                    with st.container():
+                        st.markdown(f"{status} **{rep['nome']}** {fonte_badge}<br><small>Regiões: {', '.join(rep['regioes']) if rep['regioes'] else 'Todas'}</small>", unsafe_allow_html=True)
+                        
+                        # Link copiável
+                        link_rep = f"{APP_URL}/?token={token}"
+                        st.text_input(
+                            f"Link:", 
+                            value=link_rep, 
+                            label_visibility="collapsed", 
+                            key=f"link_{token}"
+                        )
+                        
+                        # Botão para copiar configuração do secrets
+                        if st.button("📋 Copiar config para secrets.toml", key=f"copy_{token}"):
+                            config = f'"{token}" = "{rep["nome"]}|{";".join(rep["regioes"])}"'
+                            st.code(config, language="toml")
+                            st.caption("Cole isto em Settings → Secrets do Streamlit Cloud")
