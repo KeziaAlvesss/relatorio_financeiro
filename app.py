@@ -24,6 +24,11 @@ def init_supabase():
         return None
 
 supabase = init_supabase()
+# Teste de conexão simples
+if supabase:
+    st.write("✅ Supabase conectado!")
+else:
+    st.error("❌ Falha na conexão")
 
 # ✅ FUNÇÃO SEGURA PARA APP_URL
 def _get_app_url():
