@@ -24,23 +24,6 @@ def init_supabase():
         return None
 
 supabase = init_supabase()
-# Teste de conexão simples
-if supabase:
-    st.write("✅ Supabase conectado!")
-else:
-    st.error("❌ Falha na conexão")
-
-# 🔍 DIAGNÓSTICO DA CHAVE
-if supabase:
-    chave_usada = st.secrets["supabase"]["key"]
-    st.write(f"🔑 Chave carregada (primeiros 30 chars): `{chave_usada[:30]}...`")
-    st.write(f"📏 Comprimento da chave: `{len(chave_usada)}` caracteres")
-    
-    # Uma chave anon válida do Supabase geralmente tem ~180-200 caracteres
-    if len(chave_usada) < 150 or len(chave_usada) > 220:
-        st.error("⚠️ A chave parece estar truncada ou com quebras de linha!")
-    else:
-        st.success("✅ Formato da chave parece correto.")
 
 # ✅ FUNÇÃO SEGURA PARA APP_URL
 def _get_app_url():
@@ -69,7 +52,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-REPRESENTANTES_DB = "representantes.csv"  # Mantido apenas para representantes (local)
+REPRESENTANTES_DB = "representantes.csv"
 
 # ── CSS ESTILIZADO ────────────────────────────────────────────────────────────
 st.markdown("""
@@ -194,54 +177,34 @@ def carregar_historico():
         return pd.DataFrame()
     
     try:
-        # Buscar todos os registros da tabela historico_financeiro
         response = supabase.table("historico_financeiro").select("*").order("data").execute()
-        
         if not response.data:
             return pd.DataFrame()
-        
         df = pd.DataFrame(response.data)
-        
-        # Converter data para string no formato YYYY-MM-DD
         if "data" in df.columns:
             df["data"] = pd.to_datetime(df["data"], errors="coerce").dt.strftime("%Y-%m-%d")
-        
-        # Preencher NaN com 0
         df = df.fillna(0)
-        
         return df
     except Exception as e:
         st.error(f"❌ Erro ao carregar histórico: {e}")
         return pd.DataFrame()
 
-def salvar_historico(data_ref, totais, extras_por_cat=None):
-    """Salva histórico no Supabase"""
+def salvar_historico(data_ref, totais, extras_por_cat=None, total_cheque=0):
+    """Salva histórico no Supabase incluindo total_cheque"""
     if supabase is None:
         st.error("❌ Supabase não conectado")
         return False
-    
     try:
         data_str = data_ref.strftime("%Y-%m-%d")
-        
-        # Verificar se já existe registro para esta data
         existing = supabase.table("historico_financeiro").select("data").eq("data", data_str).execute()
-        
         if existing.data:
-            # Deletar registro existente
             supabase.table("historico_financeiro").delete().eq("data", data_str).execute()
-        
-        # Preparar novo registro
-        novo_registro = {"data": data_str, **totais}
-        
-        # Adicionar extras como colunas dinâmicas
+        novo_registro = {"data": data_str, **totais, "total_cheque": float(total_cheque)}
         if extras_por_cat:
             for cat, val in extras_por_cat.items():
                 col_name = _normalize_col_name(cat)
                 novo_registro[col_name] = float(val)
-        
-        # Inserir no Supabase
         supabase.table("historico_financeiro").insert(novo_registro).execute()
-        
         return True
     except Exception as e:
         st.error(f"❌ Erro ao salvar histórico: {e}")
@@ -252,7 +215,6 @@ def deletar_registro_historico(data_str):
     if supabase is None:
         st.error("❌ Supabase não conectado")
         return False
-    
     try:
         supabase.table("historico_financeiro").delete().eq("data", data_str).execute()
         return True
@@ -343,17 +305,14 @@ def visualizar_view_representante(df, representante, data_filtro=None):
         <span class="readonly-badge">🔒 Somente leitura</span>
     </div>
     """, unsafe_allow_html=True)
-    
     if representante["regioes"]:
         df = df[df["Regiao Vendedor"].isin(representante["regioes"])].copy()
-    
     if data_filtro:
         try:
             df["Dt. Neg."] = pd.to_datetime(df["Dt. Neg."], errors="coerce")
             df = df[df["Dt. Neg."].dt.strftime("%Y-%m-%d") == data_filtro]
         except:
             st.warning(f"⚠️ Data inválida: {data_filtro}")
-    
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📋 Pedidos", len(df))
@@ -362,21 +321,16 @@ def visualizar_view_representante(df, representante, data_filtro=None):
     with col3:
         medio = df["Vlr. Nota"].mean() if len(df) > 0 else 0
         st.metric("🎫 Ticket Médio", format_brl(medio))
-    
     cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
     cols_disponiveis = [c for c in cols_exibir if c in df.columns]
     df_exibir = df[cols_disponiveis].copy()
-    
     if "Previsão de entrega" in df_exibir.columns:
         df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
     if "Vlr. Nota" in df_exibir.columns:
         df_exibir["Vlr. Nota"] = df_exibir["Vlr. Nota"].map(format_brl)
-    
     rename_map = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
     df_exibir = df_exibir.rename(columns={k: v for k, v in rename_map.items() if k in df_exibir.columns})
-    
     st.dataframe(df_exibir, use_container_width=True, hide_index=True, height=500)
-    
     if len(df_exibir) > 0:
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -399,38 +353,18 @@ st.markdown(f"""
 if supabase is None:
     st.error("""
     ### ⚠️ Supabase Não Configurado
-    
     Para usar este aplicativo, você precisa configurar o Supabase:
-    
     1. Crie uma conta em [supabase.com](https://supabase.com)
     2. Crie um novo projeto
     3. Vá em Settings → API e copie a URL e a chave anon
     4. No Streamlit Cloud, vá em Settings → Secrets e adicione:
-    
     ```toml
     [supabase]
     url = "https://seu-projeto.supabase.co"
     key = "sua-chave-anon"
-    
     APP_URL = "https://seu-app.streamlit.app"
     ```
-    
-    5. No SQL Editor do Supabase, execute:
-    
-    ```sql
-    CREATE TABLE historico_financeiro (
-        id SERIAL PRIMARY KEY,
-        data DATE UNIQUE NOT NULL,
-        total_geral DECIMAL(15,2),
-        total_assistencia DECIMAL(15,2),
-        total_lojas DECIMAL(15,2),
-        total_a_vista DECIMAL(15,2),
-        total_boleto DECIMAL(15,2),
-        total_comercial DECIMAL(15,2),
-        qtd_notas INTEGER,
-        created_at TIMESTAMP DEFAULT NOW()
-    );
-    ```
+    5. No SQL Editor do Supabase, execute o script de criação da tabela.
     """)
     st.stop()
 
@@ -467,7 +401,6 @@ aba_hoje, aba_historico = st.tabs(["📋 Relatório do Dia", "📅 Histórico"])
 # ═════════════════════════════════════════════════════════════════════════════
 uploaded_file = None 
 with aba_hoje:
-    
     if representante_logado and not uploaded_file:
         st.info("📁 Faça upload do arquivo do dia para visualizar seus pedidos.")
         uploaded_file = st.file_uploader("Selecionar arquivo .xlsx do Sankhya", type=["xlsx", "xls"])
@@ -531,6 +464,10 @@ with aba_hoje:
             total_geral_ajustado = t["total_geral"] + total_extras
             pct = lambda v: f"{v/total_geral_ajustado*100:.1f}% do total" if total_geral_ajustado else "—"
 
+                        # Calcular total de cheque ANTES do botão salvar
+            df["_is_cheque"] = df["Descrição (Tipo de Negociação)"].str.upper().str.contains("CHEQUE", na=False)
+            total_cheque = df[df["_is_cheque"]]["Vlr. Nota"].sum()
+
             col_data, col_salvar = st.columns([1, 2])
             with col_data:
                 data_ref = st.date_input("📅 Data de referência deste relatório", value=datetime.today())
@@ -538,7 +475,8 @@ with aba_hoje:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾  Salvar no histórico"):
                     t_salvar = {**t, "total_geral": total_geral_ajustado}
-                    salvo = salvar_historico(data_ref, t_salvar, extras_por_cat)
+                    # ✅ Agora total_cheque já está definido
+                    salvo = salvar_historico(data_ref, t_salvar, extras_por_cat, total_cheque)
                     if salvo:
                         st.markdown('<div class="success-box"><strong>✅ Salvo com sucesso no Supabase!</strong><br>Os dados estão permanentemente armazenados no banco de dados.</div>', unsafe_allow_html=True)
                     else:
@@ -556,9 +494,7 @@ with aba_hoje:
                     f'</div>'
                 )
 
-            df["_is_cheque"] = df["Descrição (Tipo de Negociação)"].str.upper().str.contains("CHEQUE", na=False)
-            total_cheque = df[df["_is_cheque"]]["Vlr. Nota"].sum()
-
+            # total_cheque já foi calculado acima, então só usamos aqui
             st.markdown(
                 '<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr);">'
                 '<div class="kpi-card total"><div class="kpi-label">&#128176; Total Geral</div>'
@@ -662,7 +598,7 @@ with aba_hoje:
         """, unsafe_allow_html=True)
 
 # ═════════════════════════════════════════════════════════════════════════════
-# ABA 2 — HISTÓRICO (COM SUPABASE)
+# ABA 2 — HISTÓRICO (COM SUPABASE E COLUNA CHEQUE)
 # ═════════════════════════════════════════════════════════════════════════════
 with aba_historico:
     hist = carregar_historico()
@@ -684,8 +620,8 @@ with aba_historico:
         else:
             h["data_fmt"] = h["data_dt"].dt.strftime("%d/%m/%Y")
             st.markdown('<div class="sec-title">&#128202; Comparativo por Período</div>', unsafe_allow_html=True)
-            categorias_hist = {"Total Geral": ("total_geral", "#0f2942"), "Comercial": ("total_comercial", "#d4a017"), "Lojas": ("total_lojas", "#2ecc71"), "Boleto": ("total_boleto", "#2980b9"), "À Vista": ("total_a_vista", "#8e44ad"), "Assistência": ("total_assistencia", "#e07b3a")}
-            opcoes = st.multiselect("Selecionar categorias:", options=list(categorias_hist.keys()), default=["Total Geral", "Comercial", "Lojas", "Boleto"])
+            categorias_hist = {"Total Geral": ("total_geral", "#0f2942"), "Comercial": ("total_comercial", "#d4a017"), "Lojas": ("total_lojas", "#2ecc71"), "Boleto": ("total_boleto", "#2980b9"), "À Vista": ("total_a_vista", "#8e44ad"), "Assistência": ("total_assistencia", "#e07b3a"), "Cheque": ("total_cheque", "#e74c3c")}
+            opcoes = st.multiselect("Selecionar categorias:", options=list(categorias_hist.keys()), default=["Total Geral", "Comercial", "Lojas", "Boleto", "Cheque"])
             if opcoes:
                 fig = go.Figure()
                 for nome in opcoes:
@@ -697,17 +633,29 @@ with aba_historico:
             
             st.markdown('<div class="sec-title">&#128203; Tabela de Registros</div>', unsafe_allow_html=True)
             
-            cols_base = ["data_fmt", "total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial"]
+            # ✅ Adicionar total_cheque nas colunas base
+            cols_base = ["data_fmt", "total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial", "total_cheque"]
             cols_extras = [c for c in h.columns if c.startswith("extra_")]
             cols_tabela = [c for c in cols_base if c in h.columns] + cols_extras
             
             tbl = h[cols_tabela].copy()
             
-            for c in ["total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial"] + cols_extras:
+            # Formatar valores monetários (incluir total_cheque)
+            for c in ["total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial", "total_cheque"] + cols_extras:
                 if c in tbl.columns:
                     tbl[c] = pd.to_numeric(tbl[c], errors="coerce").map(format_brl)
             
-            rename_map = {"data_fmt": "Data", "total_geral": "Total Geral", "total_assistencia": "Assistência", "total_lojas": "Lojas", "total_a_vista": "À Vista", "total_boleto": "Boleto", "total_comercial": "Comercial"}
+            # Renomear colunas (incluir Cheque)
+            rename_map = {
+                "data_fmt": "Data", 
+                "total_geral": "Total Geral", 
+                "total_assistencia": "Assistência", 
+                "total_lojas": "Lojas", 
+                "total_a_vista": "À Vista", 
+                "total_boleto": "Boleto", 
+                "total_comercial": "Comercial",
+                "total_cheque": "Cheque"  # ✅ Adicionar Cheque
+            }
             for c in cols_extras:
                 rename_map[c] = c.replace("extra_", "").replace("_", " ").title()
             
