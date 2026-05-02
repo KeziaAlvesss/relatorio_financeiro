@@ -25,6 +25,18 @@ def init_supabase():
 
 supabase = init_supabase()
 
+# 🔍 DIAGNÓSTICO DA CHAVE
+if supabase:
+    chave_usada = st.secrets["supabase"]["key"]
+    st.write(f"🔑 Chave carregada (primeiros 30 chars): `{chave_usada[:30]}...`")
+    st.write(f"📏 Comprimento da chave: `{len(chave_usada)}` caracteres")
+    
+    # Uma chave anon válida do Supabase geralmente tem ~180-200 caracteres
+    if len(chave_usada) < 150 or len(chave_usada) > 220:
+        st.error("⚠️ A chave parece estar truncada ou com quebras de linha!")
+    else:
+        st.success("✅ Formato da chave parece correto.")
+
 # ✅ FUNÇÃO SEGURA PARA APP_URL
 def _get_app_url():
     try:
@@ -341,7 +353,7 @@ def visualizar_view_representante(df, representante, data_filtro=None):
 # ── HEADER COM LOGO ───────────────────────────────────────────────────────────
 st.markdown(f"""
 <div class="page-header">
-    <img class="header-logo" src="image/png;base64,{logo_b64}" />
+    <img class="header-logo" src="data:image/png;base64,{logo_b64}" />
     <div>
         <h1>Relatório Financeiro da Produção</h1>
         <p class="subtitle">📡 Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
