@@ -26,16 +26,16 @@ def init_supabase():
 supabase = init_supabase()
 
 # 🔍 DIAGNÓSTICO DA CHAVE
-if supabase:
-    chave_usada = st.secrets["supabase"]["key"]
-    st.write(f"🔑 Chave carregada (primeiros 30 chars): `{chave_usada[:30]}...`")
-    st.write(f"📏 Comprimento da chave: `{len(chave_usada)}` caracteres")
+#if supabase:
+    #chave_usada = st.secrets["supabase"]["key"]
+    #st.write(f"🔑 Chave carregada (primeiros 30 chars): `{chave_usada[:30]}...`")
+    #st.write(f"📏 Comprimento da chave: `{len(chave_usada)}` caracteres")
     
     # Uma chave anon válida do Supabase geralmente tem ~180-200 caracteres
-    if len(chave_usada) < 150 or len(chave_usada) > 220:
-        st.error("⚠️ A chave parece estar truncada ou com quebras de linha!")
-    else:
-        st.success("✅ Formato da chave parece correto.")
+    #if len(chave_usada) < 150 or len(chave_usada) > 220:
+        #st.error("⚠️ A chave parece estar truncada ou com quebras de linha!")
+    #else:
+        #st.success("✅ Formato da chave parece correto.")
 
 # ✅ FUNÇÃO SEGURA PARA APP_URL
 def _get_app_url():
