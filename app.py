@@ -752,69 +752,73 @@ with aba_historico:
                         st.error("❌ Erro ao remover registro.")
             
             # ── NOVO: Consultar Pedidos Detalhados por Data ──
-            st.markdown('<div class="sec-title">🔍 Consultar Pedidos por Data</div>', unsafe_allow_html=True)
-            
-            col_pick, col_btn = st.columns([3, 1])
-            with col_pick:
-                datas_com_pedidos = hist_sorted["data_fmt"].unique().tolist()
-                data_consulta = st.selectbox("Selecione uma data salva:", datas_com_pedidos, key="select_data_consulta")
-            with col_btn:
-                st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🔎 Carregar pedidos", key="btn_carregar_pedidos"):
-                    st.session_state["data_consulta_ativa"] = pd.to_datetime(data_consulta, format="%d/%m/%Y", errors="coerce")
-            
-            # Exibir pedidos se houver data selecionada
-            if "data_consulta_ativa" in st.session_state and st.session_state["data_consulta_ativa"]:
-                df_pedidos_hist = carregar_pedidos_historico(st.session_state["data_consulta_ativa"])
-                
-                if not df_pedidos_hist.empty:
-                    st.success(f"📦 {len(df_pedidos_hist)} pedidos encontrados para {data_consulta}")
-                    
-                    # Filtros rápidos
-                    col_f1, col_f2 = st.columns(2)
-                    with col_f1:
-                        busca_hist = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_hist")
-                    with col_f2:
-                        if "Regiao Vendedor" in df_pedidos_hist.columns:
-                            regioes_hist = sorted(df_pedidos_hist["Regiao Vendedor"].dropna().unique().tolist())
-                            filtro_reg_hist = st.multiselect("Região", options=regioes_hist, default=regioes_hist, key="filtro_reg_hist")
-                    
-                    # Aplicar filtros
-                    df_filtrado = df_pedidos_hist.copy()
-                    if busca_hist:
-                        mask = df_filtrado["Nome Parceiro (Parceiro)"].str.contains(busca_hist, case=False, na=False) | \
-                               df_filtrado["Nro. Único"].astype(str).str.contains(busca_hist, case=False, na=False)
-                        df_filtrado = df_filtrado[mask]
-                    if filtro_reg_hist and "Regiao Vendedor" in df_filtrado.columns:
-                        df_filtrado = df_filtrado[df_filtrado["Regiao Vendedor"].isin(filtro_reg_hist)]
-                    
-                    # Formatando para exibição
-                    cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
-                    cols_disponiveis = [c for c in cols_exibir if c in df_filtrado.columns]
-                    df_exibir_hist = df_filtrado[cols_disponiveis].copy()
-                    
-                    if "Previsão de entrega" in df_exibir_hist.columns:
-                        df_exibir_hist["Previsão de entrega"] = pd.to_datetime(df_exibir_hist["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
-                    if "Vlr. Nota" in df_exibir_hist.columns:
-                        df_exibir_hist["Vlr. Nota"] = df_exibir_hist["Vlr. Nota"].map(format_brl)
-                    
-                    # Renomear colunas
-                    rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
-                              "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
-                    df_exibir_hist = df_exibir_hist.rename(columns={k: v for k, v in rename.items() if k in df_exibir_hist.columns})
-                    
-                    st.dataframe(df_exibir_hist, use_container_width=True, hide_index=True, height=400)
-                    
-                    # Exportar esses pedidos
-                    buffer = io.BytesIO()
-                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                        df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
-                    st.download_button(label="⬇️ Exportar pedidos desta data", data=buffer.getvalue(), 
-                                      file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
-                                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-                else:
-                    st.warning("⚠️ Nenhum pedido detalhado encontrado para esta data. Talvez tenha sido salvo antes desta funcionalidade ser implementada.")
+            # Substitua toda a seção "Consultar Pedidos por Data" (a partir da linha ~755) por:
 
+# ── NOVO: Consultar Pedidos Detalhados por Data ──
+if not h.empty:  # ✅ Só mostra se houver dados no período
+    st.markdown('<div class="sec-title">🔍 Consultar Pedidos por Data</div>', unsafe_allow_html=True)
+    
+    col_pick, col_btn = st.columns([3, 1])
+    with col_pick:
+        # ✅ Usa h (que tem data_fmt) ao invés de hist_sorted
+        datas_com_pedidos = h["data_fmt"].unique().tolist()
+        data_consulta = st.selectbox("Selecione uma data salva:", datas_com_pedidos, key="select_data_consulta")
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔎 Carregar pedidos", key="btn_carregar_pedidos"):
+            st.session_state["data_consulta_ativa"] = pd.to_datetime(data_consulta, format="%d/%m/%Y", errors="coerce")
+    
+    # Exibir pedidos se houver data selecionada
+    if "data_consulta_ativa" in st.session_state and st.session_state["data_consulta_ativa"]:
+        df_pedidos_hist = carregar_pedidos_historico(st.session_state["data_consulta_ativa"])
+        
+        if not df_pedidos_hist.empty:
+            st.success(f"📦 {len(df_pedidos_hist)} pedidos encontrados para {data_consulta}")
+            
+            # Filtros rápidos
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                busca_hist = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_hist")
+            with col_f2:
+                if "Regiao Vendedor" in df_pedidos_hist.columns:
+                    regioes_hist = sorted(df_pedidos_hist["Regiao Vendedor"].dropna().unique().tolist())
+                    filtro_reg_hist = st.multiselect("Região", options=regioes_hist, default=regioes_hist, key="filtro_reg_hist")
+            
+            # Aplicar filtros
+            df_filtrado = df_pedidos_hist.copy()
+            if busca_hist:
+                mask = df_filtrado["Nome Parceiro (Parceiro)"].str.contains(busca_hist, case=False, na=False) | \
+                       df_filtrado["Nro. Único"].astype(str).str.contains(busca_hist, case=False, na=False)
+                df_filtrado = df_filtrado[mask]
+            if filtro_reg_hist and "Regiao Vendedor" in df_filtrado.columns:
+                df_filtrado = df_filtrado[df_filtrado["Regiao Vendedor"].isin(filtro_reg_hist)]
+            
+            # Formatando para exibição
+            cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
+            cols_disponiveis = [c for c in cols_exibir if c in df_filtrado.columns]
+            df_exibir_hist = df_filtrado[cols_disponiveis].copy()
+            
+            if "Previsão de entrega" in df_exibir_hist.columns:
+                df_exibir_hist["Previsão de entrega"] = pd.to_datetime(df_exibir_hist["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+            if "Vlr. Nota" in df_exibir_hist.columns:
+                df_exibir_hist["Vlr. Nota"] = df_exibir_hist["Vlr. Nota"].map(format_brl)
+            
+            # Renomear colunas
+            rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
+                      "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
+            df_exibir_hist = df_exibir_hist.rename(columns={k: v for k, v in rename.items() if k in df_exibir_hist.columns})
+            
+            st.dataframe(df_exibir_hist, use_container_width=True, hide_index=True, height=400)
+            
+            # Exportar esses pedidos
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
+            st.download_button(label="⬇️ Exportar pedidos desta data", data=buffer.getvalue(), 
+                              file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
+                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            st.warning("⚠️ Nenhum pedido detalhado encontrado para esta data. Talvez tenha sido salvo antes desta funcionalidade ser implementada.")
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR: GERENCIAMENTO DE REPRESENTANTES
 # ═════════════════════════════════════════════════════════════════════════════
