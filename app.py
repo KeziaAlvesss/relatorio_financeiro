@@ -7,6 +7,7 @@ from datetime import datetime
 import base64
 import hashlib
 import re
+import json
 from supabase import create_client, Client
 
 # ✅ INICIALIZAÇÃO DO SUPABASE
@@ -24,18 +25,6 @@ def init_supabase():
         return None
 
 supabase = init_supabase()
-
-# 🔍 DIAGNÓSTICO DA CHAVE
-#if supabase:
-    #chave_usada = st.secrets["supabase"]["key"]
-    #st.write(f"🔑 Chave carregada (primeiros 30 chars): `{chave_usada[:30]}...`")
-    #st.write(f"📏 Comprimento da chave: `{len(chave_usada)}` caracteres")
-    
-    # Uma chave anon válida do Supabase geralmente tem ~180-200 caracteres
-    #if len(chave_usada) < 150 or len(chave_usada) > 220:
-        #st.error("⚠️ A chave parece estar truncada ou com quebras de linha!")
-    #else:
-        #st.success("✅ Formato da chave parece correto.")
 
 # ✅ FUNÇÃO SEGURA PARA APP_URL
 def _get_app_url():
@@ -234,6 +223,53 @@ def deletar_registro_historico(data_str):
         st.error(f"❌ Erro ao deletar registro: {e}")
         return False
 
+# ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
+def salvar_pedidos_detalhados(data_ref, df_pedidos):
+    """Salva os pedidos detalhados no Supabase como JSON"""
+    if supabase is None:
+        return False
+    
+    try:
+        # Remove colunas temporárias de cálculo
+        cols_temp = [c for c in df_pedidos.columns if c.startswith("_is_")]
+        df_clean = df_pedidos.drop(columns=cols_temp, errors="ignore")
+        
+        # Converte para JSON (orient='records' cria lista de dicionários)
+        pedidos_json = df_clean.to_json(orient="records", force_ascii=False, date_format="iso")
+        
+        # Verifica se já existe registro para esta data e deleta antes de inserir
+        existing = supabase.table("historico_pedidos").select("id").eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
+        if existing.data:
+            supabase.table("historico_pedidos").delete().eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
+        
+        # Insere no Supabase
+        supabase.table("historico_pedidos").insert({
+            "data_referencia": data_ref.strftime("%Y-%m-%d"),
+            "pedido_json": pedidos_json
+        }).execute()
+        return True
+    except Exception as e:
+        st.error(f"❌ Erro ao salvar pedidos: {e}")
+        return False
+
+def carregar_pedidos_historico(data_ref):
+    """Carrega os pedidos de uma data específica do histórico"""
+    if supabase is None:
+        return pd.DataFrame()
+    
+    try:
+        response = supabase.table("historico_pedidos").select("pedido_json").eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
+        
+        if not response.data:
+            return pd.DataFrame()
+        
+        # Converte JSON de volta para DataFrame
+        pedidos_list = json.loads(response.data[0]["pedido_json"])
+        return pd.DataFrame(pedidos_list)
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar pedidos: {e}")
+        return pd.DataFrame()
+
 # ── GERENCIAMENTO DE REPRESENTANTES ───────────────────────────────────────────
 def carregar_representantes_secrets():
     reps = {}
@@ -376,7 +412,30 @@ if supabase is None:
     key = "sua-chave-anon"
     APP_URL = "https://seu-app.streamlit.app"
     ```
-    5. No SQL Editor do Supabase, execute o script de criação da tabela.
+    5. No SQL Editor do Supabase, execute o script de criação das tabelas:
+    ```sql
+    -- Tabela de totais
+    CREATE TABLE IF NOT EXISTS historico_financeiro (
+        data DATE PRIMARY KEY,
+        total_geral FLOAT,
+        total_assistencia FLOAT,
+        total_lojas FLOAT,
+        total_a_vista FLOAT,
+        total_boleto FLOAT,
+        total_comercial FLOAT,
+        total_cheque FLOAT,
+        qtd_notas INTEGER
+    );
+    
+    -- Tabela de pedidos detalhados
+    CREATE TABLE IF NOT EXISTS historico_pedidos (
+        id BIGSERIAL PRIMARY KEY,
+        data_referencia DATE NOT NULL,
+        pedido_json JSONB NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX idx_data_pedidos ON historico_pedidos (data_referencia);
+    ```
     """)
     st.stop()
 
@@ -476,7 +535,7 @@ with aba_hoje:
             total_geral_ajustado = t["total_geral"] + total_extras
             pct = lambda v: f"{v/total_geral_ajustado*100:.1f}% do total" if total_geral_ajustado else "—"
 
-                        # Calcular total de cheque ANTES do botão salvar
+            # Calcular total de cheque ANTES do botão salvar
             df["_is_cheque"] = df["Descrição (Tipo de Negociação)"].str.upper().str.contains("CHEQUE", na=False)
             total_cheque = df[df["_is_cheque"]]["Vlr. Nota"].sum()
 
@@ -487,12 +546,17 @@ with aba_hoje:
                 st.markdown("<br>", unsafe_allow_html=True)
                 if st.button("💾  Salvar no histórico"):
                     t_salvar = {**t, "total_geral": total_geral_ajustado}
-                    # ✅ Agora total_cheque já está definido
+                    # Salvar totais agregados
                     salvo = salvar_historico(data_ref, t_salvar, extras_por_cat, total_cheque)
-                    if salvo:
-                        st.markdown('<div class="success-box"><strong>✅ Salvo com sucesso no Supabase!</strong><br>Os dados estão permanentemente armazenados no banco de dados.</div>', unsafe_allow_html=True)
+                    # Salvar pedidos detalhados
+                    pedidos_salvos = salvar_pedidos_detalhados(data_ref, df)
+                    
+                    if salvo and pedidos_salvos:
+                        st.markdown(f'<div class="success-box"><strong>✅ Salvo com sucesso no Supabase!</strong><br>• Totais agregados<br>• <strong>{len(df)} pedidos detalhados</strong></div>', unsafe_allow_html=True)
+                    elif salvo:
+                        st.markdown('<span class="already-badge">⚠️ Totais salvos, mas houve erro ao salvar os detalhes dos pedidos.</span>', unsafe_allow_html=True)
                     else:
-                        st.markdown('<span class="already-badge">⚠️ Já existe um registro para essa data.</span>', unsafe_allow_html=True)
+                        st.markdown('<span class="already-badge">⚠️ Já existe um registro para essa data ou erro ao salvar.</span>', unsafe_allow_html=True)
 
             # ── KPI Cards (7 colunas com Cheque) ──
             cards_extras_html = ""
@@ -506,7 +570,6 @@ with aba_hoje:
                     f'</div>'
                 )
 
-            # total_cheque já foi calculado acima, então só usamos aqui
             st.markdown(
                 '<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr);">'
                 '<div class="kpi-card total"><div class="kpi-label">&#128176; Total Geral</div>'
@@ -645,19 +708,16 @@ with aba_historico:
             
             st.markdown('<div class="sec-title">&#128203; Tabela de Registros</div>', unsafe_allow_html=True)
             
-            # ✅ Adicionar total_cheque nas colunas base
             cols_base = ["data_fmt", "total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial", "total_cheque"]
             cols_extras = [c for c in h.columns if c.startswith("extra_")]
             cols_tabela = [c for c in cols_base if c in h.columns] + cols_extras
             
             tbl = h[cols_tabela].copy()
             
-            # Formatar valores monetários (incluir total_cheque)
             for c in ["total_geral", "total_assistencia", "total_lojas", "total_a_vista", "total_boleto", "total_comercial", "total_cheque"] + cols_extras:
                 if c in tbl.columns:
                     tbl[c] = pd.to_numeric(tbl[c], errors="coerce").map(format_brl)
             
-            # Renomear colunas (incluir Cheque)
             rename_map = {
                 "data_fmt": "Data", 
                 "total_geral": "Total Geral", 
@@ -666,7 +726,7 @@ with aba_historico:
                 "total_a_vista": "À Vista", 
                 "total_boleto": "Boleto", 
                 "total_comercial": "Comercial",
-                "total_cheque": "Cheque"  # ✅ Adicionar Cheque
+                "total_cheque": "Cheque"
             }
             for c in cols_extras:
                 rename_map[c] = c.replace("extra_", "").replace("_", " ").title()
@@ -690,6 +750,70 @@ with aba_historico:
                         st.rerun()
                     else:
                         st.error("❌ Erro ao remover registro.")
+            
+            # ── NOVO: Consultar Pedidos Detalhados por Data ──
+            st.markdown('<div class="sec-title">🔍 Consultar Pedidos por Data</div>', unsafe_allow_html=True)
+            
+            col_pick, col_btn = st.columns([3, 1])
+            with col_pick:
+                datas_com_pedidos = hist_sorted["data_fmt"].unique().tolist()
+                data_consulta = st.selectbox("Selecione uma data salva:", datas_com_pedidos, key="select_data_consulta")
+            with col_btn:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("🔎 Carregar pedidos", key="btn_carregar_pedidos"):
+                    st.session_state["data_consulta_ativa"] = pd.to_datetime(data_consulta, format="%d/%m/%Y", errors="coerce")
+            
+            # Exibir pedidos se houver data selecionada
+            if "data_consulta_ativa" in st.session_state and st.session_state["data_consulta_ativa"]:
+                df_pedidos_hist = carregar_pedidos_historico(st.session_state["data_consulta_ativa"])
+                
+                if not df_pedidos_hist.empty:
+                    st.success(f"📦 {len(df_pedidos_hist)} pedidos encontrados para {data_consulta}")
+                    
+                    # Filtros rápidos
+                    col_f1, col_f2 = st.columns(2)
+                    with col_f1:
+                        busca_hist = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_hist")
+                    with col_f2:
+                        if "Regiao Vendedor" in df_pedidos_hist.columns:
+                            regioes_hist = sorted(df_pedidos_hist["Regiao Vendedor"].dropna().unique().tolist())
+                            filtro_reg_hist = st.multiselect("Região", options=regioes_hist, default=regioes_hist, key="filtro_reg_hist")
+                    
+                    # Aplicar filtros
+                    df_filtrado = df_pedidos_hist.copy()
+                    if busca_hist:
+                        mask = df_filtrado["Nome Parceiro (Parceiro)"].str.contains(busca_hist, case=False, na=False) | \
+                               df_filtrado["Nro. Único"].astype(str).str.contains(busca_hist, case=False, na=False)
+                        df_filtrado = df_filtrado[mask]
+                    if filtro_reg_hist and "Regiao Vendedor" in df_filtrado.columns:
+                        df_filtrado = df_filtrado[df_filtrado["Regiao Vendedor"].isin(filtro_reg_hist)]
+                    
+                    # Formatando para exibição
+                    cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
+                    cols_disponiveis = [c for c in cols_exibir if c in df_filtrado.columns]
+                    df_exibir_hist = df_filtrado[cols_disponiveis].copy()
+                    
+                    if "Previsão de entrega" in df_exibir_hist.columns:
+                        df_exibir_hist["Previsão de entrega"] = pd.to_datetime(df_exibir_hist["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+                    if "Vlr. Nota" in df_exibir_hist.columns:
+                        df_exibir_hist["Vlr. Nota"] = df_exibir_hist["Vlr. Nota"].map(format_brl)
+                    
+                    # Renomear colunas
+                    rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
+                              "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
+                    df_exibir_hist = df_exibir_hist.rename(columns={k: v for k, v in rename.items() if k in df_exibir_hist.columns})
+                    
+                    st.dataframe(df_exibir_hist, use_container_width=True, hide_index=True, height=400)
+                    
+                    # Exportar esses pedidos
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                        df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
+                    st.download_button(label="⬇️ Exportar pedidos desta data", data=buffer.getvalue(), 
+                                      file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
+                                      mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                else:
+                    st.warning("⚠️ Nenhum pedido detalhado encontrado para esta data. Talvez tenha sido salvo antes desta funcionalidade ser implementada.")
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR: GERENCIAMENTO DE REPRESENTANTES
