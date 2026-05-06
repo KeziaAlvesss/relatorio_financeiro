@@ -386,18 +386,6 @@ def visualizar_view_representante(df, representante, data_filtro=None):
         nome_arquivo = f"pedidos_{representante['nome'].split()[0]}_{data_filtro or 'todos'}.xlsx"
         st.download_button(label="⬇️ Exportar meus pedidos (Excel)", data=buffer.getvalue(), file_name=nome_arquivo, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-def atualizar_registro_historico(data_str, novos_valores):
-    """Atualiza um registro existente no histórico"""
-    if supabase is None:
-        st.error("❌ Supabase não conectado")
-        return False
-    try:
-        # Atualiza o registro
-        supabase.table("historico_financeiro").update(novos_valores).eq("data", data_str).execute()
-        return True
-    except Exception as e:
-        st.error(f"❌ Erro ao atualizar registro: {e}")
-        return False
 # ── HEADER COM LOGO ───────────────────────────────────────────────────────────
 st.markdown(f"""
 <div class="page-header">
@@ -751,125 +739,17 @@ with aba_historico:
             tbl.to_excel(buf_hist, index=False, engine="openpyxl")
             st.download_button(label="⬇️ Baixar Histórico em Excel", data=buf_hist.getvalue(), file_name=f"historico_financeiro_{data_de}_{data_ate}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
-            # ── OPÇÕES DE GERENCIAMENTO ──
-st.markdown('<div class="sec-title">⚙️ Gerenciamento de Registros</div>', unsafe_allow_html=True)
-
-aba_editar, aba_remover = st.tabs(["✏️ Editar Registro", "🗑️ Remover Registro"])
-
-# ── EDITAR REGISTRO ──
-with aba_editar:
-    datas_editaveis = h["data_fmt"].tolist()
-    data_editar = st.selectbox("Selecione a data para editar:", datas_editaveis, key="select_editar")
-    
-    if data_editar:
-        # Carrega os dados atuais do registro
-        data_editar_iso = pd.to_datetime(data_editar, format="%d/%m/%Y", errors="coerce").strftime("%Y-%m-%d")
-        registro_atual = h[h["data_fmt"] == data_editar].iloc[0]
-        
-        st.info(f"📝 Editando registro de **{data_editar}**")
-        
-        # Cria colunas para os inputs
-        col1, col2 = st.columns(2)
-        
-        campos_editaveis = {
-            "total_geral": "Total Geral",
-            "total_assistencia": "Assistência",
-            "total_lojas": "Lojas",
-            "total_a_vista": "À Vista",
-            "total_boleto": "Boleto",
-            "total_comercial": "Comercial",
-            "total_cheque": "Cheque"
-        }
-        
-        novos_valores = {}
-        
-        with col1:
-            for campo, label in list(campos_editaveis.items())[:4]:
-                valor_atual = registro_atual.get(campo, 0)
-                # Remove formatação e converte para float
-                if isinstance(valor_atual, str):
-                    valor_atual = float(valor_atual.replace("R$", "").replace(".", "").replace(",", ".").strip())
-                novo_valor = st.number_input(
-                    f"{label}",
-                    min_value=0.0,
-                    value=float(valor_atual),
-                    step=100.0,
-                    format="%.2f",
-                    key=f"edit_{campo}"
-                )
-                novos_valores[campo] = novo_valor
-        
-        with col2:
-            for campo, label in list(campos_editaveis.items())[4:]:
-                valor_atual = registro_atual.get(campo, 0)
-                if isinstance(valor_atual, str):
-                    valor_atual = float(valor_atual.replace("R$", "").replace(".", "").replace(",", ".").strip())
-                novo_valor = st.number_input(
-                    f"{label}",
-                    min_value=0.0,
-                    value=float(valor_atual),
-                    step=100.0,
-                    format="%.2f",
-                    key=f"edit_{campo}"
-                )
-                novos_valores[campo] = novo_valor
-        
-        # Campos extras (Atacado, Credimoveis, etc.)
-        cols_extras = [c for c in h.columns if c.startswith("extra_")]
-        if cols_extras:
-            st.markdown("**Categorias Extras:**")
-            for campo in cols_extras:
-                label = campo.replace("extra_", "").replace("_", " ").title()
-                valor_atual = registro_atual.get(campo, 0)
-                if isinstance(valor_atual, str):
-                    valor_atual = float(valor_atual.replace("R$", "").replace(".", "").replace(",", ".").strip())
-                novo_valor = st.number_input(
-                    f"{label}",
-                    min_value=0.0,
-                    value=float(valor_atual),
-                    step=100.0,
-                    format="%.2f",
-                    key=f"edit_{campo}"
-                )
-                novos_valores[campo] = novo_valor
-        
-        # Botão de salvar
-        col_btn1, col_btn2 = st.columns([1, 3])
-        with col_btn1:
-            if st.button("💾 Salvar Alterações", type="primary"):
-                # Converte valores para float
-                valores_finais = {k: float(v) for k, v in novos_valores.items()}
-                atualizado = atualizar_registro_historico(data_editar_iso, valores_finais)
-                if atualizado:
-                    st.success(f"✅ Registro de {data_editar} atualizado com sucesso!")
-                    st.balloons()
-                    st.rerun()
-                else:
-                    st.error("❌ Erro ao atualizar registro.")
-        
-        with col_btn2:
-            if st.button("🔄 Cancelar"):
-                st.rerun()
-
-# ── REMOVER REGISTRO ──
-with aba_remover:
-    datas_disp = h["data_fmt"].tolist()
-    data_del = st.selectbox("Selecione a data para remover:", datas_disp, key="select_remover")
-    
-    if data_del:
-        # Mostra resumo do que será removido
-        registro_del = h[h["data_fmt"] == data_del].iloc[0]
-        st.warning(f"⚠️ Você está prestes a remover o registro de **{data_del}**")
-        st.markdown(f"**Total Geral:** {registro_del.get('total_geral', 'R$ 0,00')}")
-        
-        if st.button("🗑️ Confirmar Remoção", type="primary"):
-            data_del_iso = pd.to_datetime(data_del, format="%d/%m/%Y", errors="coerce").strftime("%Y-%m-%d")
-            deletado = deletar_registro_historico(data_del_iso)
-            if deletado:
-                st.success(f"✅ Registro de {data_del} removido do banco de dados.")
-                st.rerun()
-            else:
-                st.error("❌ Erro ao remover registro.")
+            with st.expander("🗑️ Remover um registro"):
+                datas_disp = h["data_fmt"].tolist()
+                data_del = st.selectbox("Selecione a data para remover:", datas_disp)
+                if st.button("Remover"):
+                    data_del_iso = pd.to_datetime(data_del, format="%d/%m/%Y", errors="coerce").strftime("%Y-%m-%d")
+                    deletado = deletar_registro_historico(data_del_iso)
+                    if deletado:
+                        st.success(f"✅ Registro de {data_del} removido do banco de dados.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Erro ao remover registro.")
             
             # ── NOVO: Consultar Pedidos Detalhados por Data ──
             # Substitua toda a seção "Consultar Pedidos por Data" (a partir da linha ~755) por:
