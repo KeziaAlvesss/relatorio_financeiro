@@ -313,7 +313,8 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     pdf.set_font("Arial", 'I', 9)
     pdf.cell(0, 8, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
     
-    return pdf.output(dest='S').encode('latin-1')
+    # Na linha de retorno, mude para:
+    return pdf.output(dest='S').encode('latin-1', errors='ignore')
 
 # ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
 def salvar_pedidos_detalhados(data_ref, df_pedidos):
