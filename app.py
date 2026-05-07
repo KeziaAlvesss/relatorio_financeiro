@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import io
 import os
+from fpdf import FPDF
+import io
 from datetime import datetime
 import base64
 import hashlib
@@ -222,6 +224,96 @@ def deletar_registro_historico(data_str):
     except Exception as e:
         st.error(f"❌ Erro ao deletar registro: {e}")
         return False
+def gerar_pdf_pedidos(df_pedidos, data_referencia):
+    """Gera PDF dos pedidos formatado"""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    
+    # Título
+    pdf.set_font("Arial", 'B', 16)
+    pdf.cell(0, 10, f"Pedidos - {data_referencia.strftime('%d/%m/%Y')}", ln=True, align='C')
+    pdf.ln(5)
+    
+    # Informações gerais
+    pdf.set_font("Arial", size=11)
+    pdf.cell(0, 8, f"Total de pedidos: {len(df_pedidos)}", ln=True)
+    
+    # Calcular total
+    if "Vlr. Nota" in df_pedidos.columns:
+        total = df_pedidos["Vlr. Nota"].sum()
+        pdf.cell(0, 8, f"Valor total: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), ln=True)
+    
+    pdf.ln(5)
+    
+    # Cabeçalho da tabela
+    pdf.set_font("Arial", 'B', 10)
+    
+    # Definir colunas a serem exibidas
+    cols = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", 
+            "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
+    cols_existentes = [c for c in cols if c in df_pedidos.columns]
+    
+    # Larguras das colunas
+    larguras = [25, 25, 60, 30, 40, 35, 25]
+    larguras = [l for i, l in enumerate(larguras) if i < len(cols_existentes)]
+    
+    # Cabeçalhos
+    headers = {
+        "Nro. Único": "Nº Único",
+        "Previsão de entrega": "Prev. Entrega",
+        "Nome Parceiro (Parceiro)": "Parceiro",
+        "Vlr. Nota": "Valor",
+        "Descrição (Tipo de Negociação)": "Negociação",
+        "Apelido (Vendedor)": "Vendedor",
+        "Regiao Vendedor": "Região"
+    }
+    
+    # Desenhar cabeçalho
+    x_start = pdf.get_x()
+    y_start = pdf.get_y()
+    
+    pdf.set_fill_color(200, 220, 240)
+    for i, col in enumerate(cols_existentes):
+        pdf.cell(larguras[i], 10, headers.get(col, col), border=1, align='C', fill=True)
+    
+    pdf.ln()
+    
+    # Dados
+    pdf.set_font("Arial", size=9)
+    for _, row in df_pedidos.iterrows():
+        pdf.set_x(x_start)
+        for i, col in enumerate(cols_existentes):
+            valor = row[col]
+            
+            # Formatar data
+            if col == "Previsão de entrega":
+                try:
+                    valor = pd.to_datetime(valor).strftime("%d/%m/%Y")
+                except:
+                    pass
+            
+            # Formatar valor
+            if col == "Vlr. Nota":
+                try:
+                    valor = f"R$ {float(valor):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                except:
+                    valor = "R$ 0,00"
+            
+            # Truncar texto longo
+            if isinstance(valor, str) and len(str(valor)) > 30:
+                valor = str(valor)[:27] + "..."
+            
+            pdf.cell(larguras[i], 8, str(valor), border=1, align='L')
+        
+        pdf.ln()
+    
+    # Rodapé
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 9)
+    pdf.cell(0, 8, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
+    
+    return pdf.output(dest='S').encode('latin-1')
 
 # ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
 def salvar_pedidos_detalhados(data_ref, df_pedidos):
@@ -811,14 +903,32 @@ if not h.empty:  # ✅ Só mostra se houver dados no período
             st.dataframe(df_exibir_hist, use_container_width=True, hide_index=True, height=400)
             
             # Exportar esses pedidos
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
-            st.download_button(label="⬇️ Exportar pedidos desta data", data=buffer.getvalue(), 
-                              file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
-                              mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        else:
-            st.warning("⚠️ Nenhum pedido detalhado encontrado para esta data. Talvez tenha sido salvo antes desta funcionalidade ser implementada.")
+            
+            col_pdf, col_excel = st.columns(2)
+            
+            with col_pdf:
+                # Gerar PDF
+                try:
+                    pdf_bytes = gerar_pdf_pedidos(df_filtrado, st.session_state["data_consulta_ativa"])
+                    st.download_button(
+                        label="📄 Exportar pedidos (PDF)", 
+                        data=pdf_bytes, 
+                        file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.pdf",
+                        mime="application/pdf"
+                    )
+                except Exception as e:
+                    st.error(f"Erro ao gerar PDF: {e}")
+            
+            with col_excel:
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                    df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
+                st.download_button(
+                    label="⬇️ Exportar pedidos (Excel)", 
+                    data=buffer.getvalue(), 
+                    file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR: GERENCIAMENTO DE REPRESENTANTES
 # ═════════════════════════════════════════════════════════════════════════════
