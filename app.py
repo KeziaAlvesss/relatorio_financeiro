@@ -226,12 +226,14 @@ def deletar_registro_historico(data_str):
         return False
 def gerar_pdf_pedidos(df_pedidos, data_referencia):
     """Gera PDF dos pedidos formatado"""
+    from fpdf import FPDF
+    
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+    pdf.set_font("Arial", size=11)
     
     # Título
-    pdf.set_font("Arial", 'B', 16)
+    pdf.set_font("Arial", 'B', 14)
     pdf.cell(0, 10, f"Pedidos - {data_referencia.strftime('%d/%m/%Y')}", ln=True, align='C')
     pdf.ln(5)
     
@@ -242,23 +244,24 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     # Calcular total
     if "Vlr. Nota" in df_pedidos.columns:
         total = df_pedidos["Vlr. Nota"].sum()
-        pdf.cell(0, 8, f"Valor total: R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."), ln=True)
+        total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        pdf.cell(0, 8, f"Valor total: {total_fmt}", ln=True)
     
     pdf.ln(5)
     
     # Cabeçalho da tabela
-    pdf.set_font("Arial", 'B', 10)
+    pdf.set_font("Arial", 'B', 9)
     
     # Definir colunas a serem exibidas
     cols = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", 
             "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
     cols_existentes = [c for c in cols if c in df_pedidos.columns]
     
-    # Larguras das colunas
-    larguras = [25, 25, 60, 30, 40, 35, 25]
+    # Larguras das colunas (ajustadas)
+    larguras = [20, 22, 50, 25, 45, 30, 28]
     larguras = [l for i, l in enumerate(larguras) if i < len(cols_existentes)]
     
-    # Cabeçalhos
+    # Mapeamento de cabeçalhos
     headers = {
         "Nro. Único": "Nº Único",
         "Previsão de entrega": "Prev. Entrega",
@@ -270,28 +273,24 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     }
     
     # Desenhar cabeçalho
-    x_start = pdf.get_x()
-    y_start = pdf.get_y()
-    
     pdf.set_fill_color(200, 220, 240)
     for i, col in enumerate(cols_existentes):
-        pdf.cell(larguras[i], 10, headers.get(col, col), border=1, align='C', fill=True)
+        pdf.cell(larguras[i], 8, headers.get(col, col), border=1, align='C', fill=True)
     
     pdf.ln()
     
     # Dados
-    pdf.set_font("Arial", size=9)
+    pdf.set_font("Arial", size=8)
     for _, row in df_pedidos.iterrows():
-        pdf.set_x(x_start)
         for i, col in enumerate(cols_existentes):
-            valor = row[col]
+            valor = row[col] if col in row else ""
             
             # Formatar data
             if col == "Previsão de entrega":
                 try:
                     valor = pd.to_datetime(valor).strftime("%d/%m/%Y")
                 except:
-                    pass
+                    valor = ""
             
             # Formatar valor
             if col == "Vlr. Nota":
@@ -300,22 +299,28 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
                 except:
                     valor = "R$ 0,00"
             
-            # Truncar texto longo
-            if isinstance(valor, str) and len(str(valor)) > 30:
-                valor = str(valor)[:27] + "..."
+            # Converter para string e truncar se necessário
+            valor_str = str(valor) if valor else ""
+            if len(valor_str) > 35:
+                valor_str = valor_str[:32] + "..."
             
-            pdf.cell(larguras[i], 8, str(valor), border=1, align='L')
+            # Codificar para latin-1 (suportado pelo FPDF)
+            try:
+                valor_str = valor_str.encode('latin-1', 'replace').decode('latin-1')
+            except:
+                valor_str = valor_str.encode('ascii', 'replace').decode('ascii')
+            
+            pdf.cell(larguras[i], 6, valor_str, border=1)
         
         pdf.ln()
     
     # Rodapé
     pdf.ln(5)
-    pdf.set_font("Arial", 'I', 9)
-    pdf.cell(0, 8, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
+    pdf.set_font("Arial", 'I', 8)
+    pdf.cell(0, 6, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='R')
     
-    # Na linha de retorno, mude para:
-    return pdf.output(dest='S').encode('latin-1', errors='ignore')
-
+    # Retornar PDF como bytes (CORREÇÃO AQUI)
+    return pdf.output(dest='S').encode('latin-1', errors='replace')
 # ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
 def salvar_pedidos_detalhados(data_ref, df_pedidos):
     """Salva os pedidos detalhados no Supabase como JSON"""
