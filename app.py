@@ -264,7 +264,7 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     larguras = [l for i, l in enumerate(larguras) if i < len(cols_existentes)]
     largura_total_tabela = sum(larguras)
     
-    headers = {"Nro. Único": "Nº", "Previsão de entrega": "Entrega", 
+    headers = {"Nro. Único": "Nº", "Previsão de entrega": "Data de produção", 
                "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor",
                "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
     
