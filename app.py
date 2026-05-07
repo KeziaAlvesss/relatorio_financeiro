@@ -234,16 +234,13 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     
     # --- 1. ADICIONAR LOGO ---
     try:
-        # Caminho da logo (deve estar na mesma pasta do script)
         logo_path = "logo-bonsono.png"
         if os.path.exists(logo_path):
-            # x=85 centraliza uma imagem de 40mm numa página de 210mm (210-40)/2 = 85
             pdf.image(logo_path, x=85, y=10, w=40) 
-            pdf.ln(25) # Espaço após a logo
+            pdf.ln(25)
         else:
-            pdf.ln(10) # Se não achar a logo, só dá um espaço
+            pdf.ln(10)
     except Exception as e:
-        st.warning(f"Erro ao carregar logo: {e}")
         pdf.ln(10)
 
     # --- 2. TÍTULO ---
@@ -259,14 +256,11 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     # --- 4. CONFIGURAÇÃO DA TABELA ---
     pdf.set_font("Arial", 'B', 8)
     
-    # Colunas desejadas
     cols = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", 
             "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
     cols_existentes = [c for c in cols if c in df_pedidos.columns]
     
-    # Larguras ajustadas para caberem na página e permitirem centralização
-    # Soma total = ~175mm (margem de segurança para ficar bonito no centro)
-    larguras = [22, 25, 65, 28, 35, 25] 
+    larguras = [22, 25, 65, 28, 35, 25]
     larguras = [l for i, l in enumerate(larguras) if i < len(cols_existentes)]
     largura_total_tabela = sum(larguras)
     
@@ -275,12 +269,10 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
                "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
     
     # --- 5. DESENHAR TABELA CENTRALIZADA ---
-    
-    # Calcular posição X inicial para centralizar
     x_inicio = (210 - largura_total_tabela) / 2
     
-    pdf.set_xy(x_inicio, pdf.get_y()) # Move o cursor para o início centralizado
-    pdf.set_fill_color(230, 240, 250) # Cor de fundo suave do cabeçalho
+    pdf.set_xy(x_inicio, pdf.get_y())
+    pdf.set_fill_color(230, 240, 250)
     
     # Cabeçalho
     for i, col in enumerate(cols_existentes):
@@ -288,9 +280,9 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     pdf.ln()
     
     # Dados
-    pdf.set_font("Arial", size=7) # Fonte um pouco menor para caber melhor
+    pdf.set_font("Arial", size=7)
     for _, row in df_pedidos.iterrows():
-        pdf.set_x(x_inicio) # Retoma o X centralizado a cada linha nova
+        pdf.set_x(x_inicio)
         
         for i, col in enumerate(cols_existentes):
             valor = row[col] if pd.notna(row[col]) else ""
@@ -306,8 +298,14 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
                 except:
                     valor = "R$ 0,00"
             
-            # Truncar texto longo para não quebrar a linha
+            # Truncar e normalizar texto
             valor_str = str(valor)[:30] if len(str(valor)) > 30 else str(valor)
+            
+            # Normalizar caracteres especiais para ASCII
+            try:
+                valor_str = valor_str.encode('latin-1', 'replace').decode('latin-1')
+            except:
+                pass
             
             pdf.cell(larguras[i], 6, valor_str, border=1, align='L')
         pdf.ln()
@@ -317,11 +315,17 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
     pdf.set_font("Arial", 'I', 8)
     pdf.cell(0, 6, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')} - Sistema Bonsono", ln=True, align='C')
     
-    # Retorno seguro
-    try:
-        return pdf.output(dest='S').encode('latin-1', errors='ignore')
-    except:
-        return pdf.output(dest='S')
+    # --- 7. RETORNAR PDF CORRETAMENTE ---
+    pdf_bytes = pdf.output(dest='S')
+    
+    # Se for bytearray ou bytes, retorna diretamente
+    if isinstance(pdf_bytes, (bytes, bytearray)):
+        return bytes(pdf_bytes)
+    else:
+        # Se for string, codifica
+        return pdf_bytes.encode('latin-1', errors='replace')
+    
+    
 # ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
 def salvar_pedidos_detalhados(data_ref, df_pedidos):
     """Salva os pedidos detalhados no Supabase como JSON"""
