@@ -225,48 +225,73 @@ def deletar_registro_historico(data_str):
         st.error(f"❌ Erro ao deletar registro: {e}")
         return False
 def gerar_pdf_pedidos(df_pedidos, data_referencia):
-    """Gera PDF dos pedidos formatado"""
+    """Gera PDF dos pedidos centralizado com Logo"""
     from fpdf import FPDF
-    
+    import os
+
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=11)
     
-    # Título
+    # --- 1. ADICIONAR LOGO ---
+    try:
+        # Caminho da logo (deve estar na mesma pasta do script)
+        logo_path = "logo-bonsono.png"
+        if os.path.exists(logo_path):
+            # x=85 centraliza uma imagem de 40mm numa página de 210mm (210-40)/2 = 85
+            pdf.image(logo_path, x=85, y=10, w=40) 
+            pdf.ln(25) # Espaço após a logo
+        else:
+            pdf.ln(10) # Se não achar a logo, só dá um espaço
+    except Exception as e:
+        st.warning(f"Erro ao carregar logo: {e}")
+        pdf.ln(10)
+
+    # --- 2. TÍTULO ---
     pdf.set_font("Arial", 'B', 14)
     pdf.cell(0, 10, f"Pedidos - {data_referencia.strftime('%d/%m/%Y')}", ln=True, align='C')
     pdf.ln(5)
     
-    # Informações gerais
-    pdf.cell(0, 8, f"Total de pedidos: {len(df_pedidos)}", ln=True)
-    
-    if "Vlr. Nota" in df_pedidos.columns:
-        total = df_pedidos["Vlr. Nota"].sum()
-        total_fmt = f"R$ {total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        pdf.cell(0, 8, f"Valor total: {total_fmt}", ln=True)
-    
+    # --- 3. INFORMAÇÕES GERAIS ---
+    pdf.set_font("Arial", size=11)
+    pdf.cell(0, 8, f"Total de pedidos: {len(df_pedidos)}", ln=True, align='C')
     pdf.ln(5)
     
-    # Cabeçalhos da tabela
-    pdf.set_font("Arial", 'B', 9)
+    # --- 4. CONFIGURAÇÃO DA TABELA ---
+    pdf.set_font("Arial", 'B', 8)
+    
+    # Colunas desejadas
     cols = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", 
             "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
     cols_existentes = [c for c in cols if c in df_pedidos.columns]
-    larguras = [25, 25, 60, 30, 35, 30]
+    
+    # Larguras ajustadas para caberem na página e permitirem centralização
+    # Soma total = ~175mm (margem de segurança para ficar bonito no centro)
+    larguras = [22, 25, 65, 28, 35, 25] 
     larguras = [l for i, l in enumerate(larguras) if i < len(cols_existentes)]
+    largura_total_tabela = sum(larguras)
     
     headers = {"Nro. Único": "Nº", "Previsão de entrega": "Entrega", 
                "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor",
                "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
     
-    pdf.set_fill_color(200, 220, 240)
+    # --- 5. DESENHAR TABELA CENTRALIZADA ---
+    
+    # Calcular posição X inicial para centralizar
+    x_inicio = (210 - largura_total_tabela) / 2
+    
+    pdf.set_xy(x_inicio, pdf.get_y()) # Move o cursor para o início centralizado
+    pdf.set_fill_color(230, 240, 250) # Cor de fundo suave do cabeçalho
+    
+    # Cabeçalho
     for i, col in enumerate(cols_existentes):
-        pdf.cell(larguras[i], 8, headers.get(col, col)[:15], border=1, align='C', fill=True)
+        pdf.cell(larguras[i], 8, headers.get(col, col), border=1, align='C', fill=True)
     pdf.ln()
     
     # Dados
-    pdf.set_font("Arial", size=8)
+    pdf.set_font("Arial", size=7) # Fonte um pouco menor para caber melhor
     for _, row in df_pedidos.iterrows():
+        pdf.set_x(x_inicio) # Retoma o X centralizado a cada linha nova
+        
         for i, col in enumerate(cols_existentes):
             valor = row[col] if pd.notna(row[col]) else ""
             
@@ -281,18 +306,22 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
                 except:
                     valor = "R$ 0,00"
             
-            valor_str = str(valor)[:25] if len(str(valor)) > 25 else str(valor)
-            pdf.cell(larguras[i], 6, valor_str, border=1)
+            # Truncar texto longo para não quebrar a linha
+            valor_str = str(valor)[:30] if len(str(valor)) > 30 else str(valor)
+            
+            pdf.cell(larguras[i], 6, valor_str, border=1, align='L')
         pdf.ln()
     
-    # CORREÇÃO: Retornar bytes corretamente
-    pdf_bytes = pdf.output(dest='S')
+    # --- 6. RODAPÉ ---
+    pdf.ln(5)
+    pdf.set_font("Arial", 'I', 8)
+    pdf.cell(0, 6, f"Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')} - Sistema Bonsono", ln=True, align='C')
     
-    # Verifica se já é bytes ou se precisa codificar
-    if isinstance(pdf_bytes, str):
-        return pdf_bytes.encode('latin-1', errors='replace')
-    else:
-        return bytes(pdf_bytes)
+    # Retorno seguro
+    try:
+        return pdf.output(dest='S').encode('latin-1', errors='ignore')
+    except:
+        return pdf.output(dest='S')
 # ── NOVAS FUNÇÕES: PEDIDOS DETALHADOS ─────────────────────────────────────────
 def salvar_pedidos_detalhados(data_ref, df_pedidos):
     """Salva os pedidos detalhados no Supabase como JSON"""
