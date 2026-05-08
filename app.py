@@ -245,7 +245,7 @@ def gerar_pdf_pedidos(df_pedidos, data_referencia):
 
     # --- 2. TÍTULO ---
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(0, 10, f"Pedidos - {data_referencia.strftime('%d/%m/%Y')}", ln=True, align='C')
+    pdf.cell(0, 10, f"Pedidos na produção de - {data_referencia.strftime('%d/%m/%Y')}", ln=True, align='C')
     pdf.ln(5)
     
     # --- 3. INFORMAÇÕES GERAIS ---
@@ -858,88 +858,146 @@ with aba_historico:
             # Substitua toda a seção "Consultar Pedidos por Data" (a partir da linha ~755) por:
 
 # ── NOVO: Consultar Pedidos Detalhados por Data ──
-if not h.empty:  # ✅ Só mostra se houver dados no período
-    st.markdown('<div class="sec-title">🔍 Consultar Pedidos por Data</div>', unsafe_allow_html=True)
-    
-    col_pick, col_btn = st.columns([3, 1])
-    with col_pick:
-        # ✅ Usa h (que tem data_fmt) ao invés de hist_sorted
-        datas_com_pedidos = h["data_fmt"].unique().tolist()
-        data_consulta = st.selectbox("Selecione uma data salva:", datas_com_pedidos, key="select_data_consulta")
-    with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔎 Carregar pedidos", key="btn_carregar_pedidos"):
-            st.session_state["data_consulta_ativa"] = pd.to_datetime(data_consulta, format="%d/%m/%Y", errors="coerce")
-    
-    # Exibir pedidos se houver data selecionada
-    if "data_consulta_ativa" in st.session_state and st.session_state["data_consulta_ativa"]:
-        df_pedidos_hist = carregar_pedidos_historico(st.session_state["data_consulta_ativa"])
-        
-        if not df_pedidos_hist.empty:
-            st.success(f"📦 {len(df_pedidos_hist)} pedidos encontrados para {data_consulta}")
-            
-            # Filtros rápidos
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                busca_hist = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_hist")
-            with col_f2:
-                if "Regiao Vendedor" in df_pedidos_hist.columns:
-                    regioes_hist = sorted(df_pedidos_hist["Regiao Vendedor"].dropna().unique().tolist())
-                    filtro_reg_hist = st.multiselect("Região", options=regioes_hist, default=regioes_hist, key="filtro_reg_hist")
-            
-            # Aplicar filtros
-            df_filtrado = df_pedidos_hist.copy()
-            if busca_hist:
-                mask = df_filtrado["Nome Parceiro (Parceiro)"].str.contains(busca_hist, case=False, na=False) | \
-                       df_filtrado["Nro. Único"].astype(str).str.contains(busca_hist, case=False, na=False)
-                df_filtrado = df_filtrado[mask]
-            if filtro_reg_hist and "Regiao Vendedor" in df_filtrado.columns:
-                df_filtrado = df_filtrado[df_filtrado["Regiao Vendedor"].isin(filtro_reg_hist)]
-            
-            # Formatando para exibição
-            cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)", "Regiao Vendedor"]
-            cols_disponiveis = [c for c in cols_exibir if c in df_filtrado.columns]
-            df_exibir_hist = df_filtrado[cols_disponiveis].copy()
-            
-            if "Previsão de entrega" in df_exibir_hist.columns:
-                df_exibir_hist["Previsão de entrega"] = pd.to_datetime(df_exibir_hist["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
-            if "Vlr. Nota" in df_exibir_hist.columns:
-                df_exibir_hist["Vlr. Nota"] = df_exibir_hist["Vlr. Nota"].map(format_brl)
-            
-            # Renomear colunas
-            rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
-                      "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
-            df_exibir_hist = df_exibir_hist.rename(columns={k: v for k, v in rename.items() if k in df_exibir_hist.columns})
-            
-            st.dataframe(df_exibir_hist, use_container_width=True, hide_index=True, height=400)
-            
-            # Exportar esses pedidos
-            
-            col_pdf, col_excel = st.columns(2)
-            
-            with col_pdf:
-                # Gerar PDF
+# ── NOVO: Consultar Pedidos por Período (ou Dia Único) ──
+st.markdown('<div class="sec-title">📅 Consultar Pedidos</div>', unsafe_allow_html=True)
+
+# 1. Seleção de Datas (Calendário com Range)
+# O valor padrão é uma tupla (hoje, hoje), o que foca em 1 dia específico
+hoje = datetime.today().date()
+datas_selecionadas = st.date_input(
+    "Selecione o período (Início e Fim)", 
+    value=(hoje, hoje), # Começa focado em apenas 1 dia
+    key="datas_range_picker"
+)
+
+# Se o usuário selecionar um range, descompacta
+if len(datas_selecionadas) == 2:
+    data_inicio, data_fim = datas_selecionadas
+else:
+    # Caso o usuário selecione apenas uma data (em versões antigas do streamlit)
+    data_inicio = data_fim = datas_selecionadas
+
+col_btn, col_spacer = st.columns([1, 4])
+with col_btn:
+    if st.button("🔎 Carregar Pedidos", key="btn_carregar_periodo", type="primary"):
+        if data_inicio > data_fim:
+            st.error("❌ A data de início não pode ser maior que a data de fim.")
+        else:
+            with st.spinner("⏳ Buscando pedidos..."):
                 try:
-                    pdf_bytes = gerar_pdf_pedidos(df_filtrado, st.session_state["data_consulta_ativa"])
-                    st.download_button(
-                        label="📄 Exportar pedidos (PDF)", 
-                        data=pdf_bytes, 
-                        file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.pdf",
-                        mime="application/pdf"
-                    )
+                    # Busca no Supabase usando gte (>=) e lte (<=)
+                    # Isso cobre tanto o caso de 1 dia quanto de vários dias
+                    response = supabase.table("historico_pedidos")\
+                        .select("data_referencia, pedido_json")\
+                        .gte("data_referencia", data_inicio.isoformat())\
+                        .lte("data_referencia", data_fim.isoformat())\
+                        .execute()
+                    
+                    if response.data:
+                        df_geral = pd.DataFrame()
+                        total_pedidos = 0
+                        
+                        # Junta os JSONs de cada dia em um DataFrame único
+                        for registro in response.data:
+                            try:
+                                lista_pedidos = json.loads(registro["pedido_json"])
+                                df_dia = pd.DataFrame(lista_pedidos)
+                                df_geral = pd.concat([df_geral, df_dia], ignore_index=True)
+                                total_pedidos += len(df_dia)
+                            except Exception as e_json:
+                                pass 
+                        
+                        if not df_geral.empty:
+                            # Texto dinâmico para o título
+                            if data_inicio == data_fim:
+                                msg_sucesso = f"✅ {total_pedidos} pedidos encontrados para {data_inicio.strftime('%d/%m/%Y')}!"
+                            else:
+                                msg_sucesso = f"✅ {total_pedidos} pedidos encontrados entre {data_inicio.strftime('%d/%m')} e {data_fim.strftime('%d/%m')}!"
+                            
+                            st.success(msg_sucesso)
+                            
+                            # Guarda no session state para usar no export
+                            st.session_state["df_pedidos_range"] = df_geral
+                            st.session_state["range_label"] = f"{data_inicio.strftime('%d-%m')}_{data_fim.strftime('%d-%m')}"
+                            st.session_state["data_ref_pdf"] = data_fim # Para o cabeçalho do PDF
+                            
+                        else:
+                            st.warning("⚠️ Nenhum pedido detalhado encontrado.")
+                            st.session_state["df_pedidos_range"] = None
+                            
+                    else:
+                        st.warning("⚠️ Nenhum registro encontrado no banco de dados para este período.")
+                        st.session_state["df_pedidos_range"] = None
+                        
                 except Exception as e:
-                    st.error(f"Erro ao gerar PDF: {e}")
+                    st.error(f"❌ Erro ao conectar com banco: {e}")
+
+# 2. Exibição e Exportação (se houver dados carregados)
+if st.session_state.get("df_pedidos_range") is not None:
+    df_range = st.session_state["df_pedidos_range"]
+    
+    # Filtros rápidos
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
+        busca_range = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_range")
+    with col_f2:
+        if "Regiao Vendedor" in df_range.columns:
+            regioes_range = sorted(df_range["Regiao Vendedor"].dropna().unique().tolist())
+            filtro_reg_range = st.multiselect("Região", options=regioes_range, default=regioes_range, key="filtro_reg_range")
+    
+    # Aplicar filtros na tabela exibida
+    df_filtrado_range = df_range.copy()
+    if busca_range:
+        mask = df_filtrado_range["Nome Parceiro (Parceiro)"].str.contains(busca_range, case=False, na=False) | \
+               df_filtrado_range["Nro. Único"].astype(str).str.contains(busca_range, case=False, na=False)
+        df_filtrado_range = df_filtrado_range[mask]
+    if filtro_reg_range and "Regiao Vendedor" in df_filtrado_range.columns:
+        df_filtrado_range = df_filtrado_range[df_filtrado_range["Regiao Vendedor"].isin(filtro_reg_range)]
+    
+    # Exibir tabela
+    cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
+    cols_disponiveis = [c for c in cols_exibir if c in df_filtrado_range.columns]
+    df_exibir_range = df_filtrado_range[cols_disponiveis].copy()
+    
+    # Formatação
+    if "Previsão de entrega" in df_exibir_range.columns:
+        df_exibir_range["Previsão de entrega"] = pd.to_datetime(df_exibir_range["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+    if "Vlr. Nota" in df_exibir_range.columns:
+        df_exibir_range["Vlr. Nota"] = df_exibir_range["Vlr. Nota"].map(format_brl)
+    
+    rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
+              "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
+    df_exibir_range = df_exibir_range.rename(columns={k: v for k, v in rename.items() if k in df_exibir_range.columns})
+    
+    st.dataframe(df_exibir_range, use_container_width=True, hide_index=True, height=400)
+    
+    # Exportação (PDF e Excel)
+    st.markdown('<div class="sec-title">📥 Exportar</div>', unsafe_allow_html=True)
+    col_pdf, col_excel = st.columns(2)
+    
+    with col_pdf:
+        try:
+            # Gera o PDF passando o DataFrame filtrado
+            pdf_bytes = gerar_pdf_pedidos(df_filtrado_range, st.session_state.get("data_ref_pdf", hoje))
+            st.download_button(
+                label="📄 Exportar Pedidos (PDF)", 
+                data=pdf_bytes, 
+                file_name=f"pedidos_{st.session_state['range_label']}.pdf",
+                mime="application/pdf"
+            )
+        except Exception as e:
+            st.error(f"Erro ao gerar PDF: {e}")
             
-            with col_excel:
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                    df_filtrado.to_excel(writer, sheet_name="Pedidos", index=False)
-                st.download_button(
-                    label="⬇️ Exportar pedidos (Excel)", 
-                    data=buffer.getvalue(), 
-                    file_name=f"pedidos_{st.session_state['data_consulta_ativa'].strftime('%Y-%m-%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+    with col_excel:
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_filtrado_range.to_excel(writer, sheet_name="Pedidos", index=False)
+        st.download_button(
+            label="⬇️ Exportar Pedidos (Excel)", 
+            data=buffer.getvalue(), 
+            file_name=f"pedidos_{st.session_state['range_label']}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 # ═════════════════════════════════════════════════════════════════════════════
 # SIDEBAR: GERENCIAMENTO DE REPRESENTANTES
 # ═════════════════════════════════════════════════════════════════════════════
