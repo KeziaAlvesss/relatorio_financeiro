@@ -4,7 +4,7 @@ import plotly.graph_objects as go
 import io
 import os
 from fpdf import FPDF
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import base64
 import hashlib
 import re
@@ -129,7 +129,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 
 logo_b64 = get_image_base64("logo-bonsono.png")
 
-# ── HELPERS DE FORMATAÇÃO E LÓGICA ───────────────────────────────────────────
+# ── HELPERS DE FORMATAÇÃO E LÓGICA ────────────────────────────────────────────
 def format_brl(value):
     try:
         return f"R$ {float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -180,7 +180,7 @@ def carregar_historico():
     
     try:
         response = supabase.table("historico_financeiro").select("*").order("data").execute()
-        if not response:
+        if not response.data:
             return pd.DataFrame()
         df = pd.DataFrame(response.data)
         if "data" in df.columns:
@@ -199,7 +199,7 @@ def salvar_historico(data_ref, totais, extras_por_cat=None, total_cheque=0):
     try:
         data_str = data_ref.strftime("%Y-%m-%d")
         existing = supabase.table("historico_financeiro").select("data").eq("data", data_str).execute()
-        if existing:
+        if existing.data:
             supabase.table("historico_financeiro").delete().eq("data", data_str).execute()
         novo_registro = {"data": data_str, **totais, "total_cheque": float(total_cheque)}
         if extras_por_cat:
@@ -209,7 +209,7 @@ def salvar_historico(data_ref, totais, extras_por_cat=None, total_cheque=0):
         supabase.table("historico_financeiro").insert(novo_registro).execute()
         return True
     except Exception as e:
-        st.error(f" Erro ao salvar histórico: {e}")
+        st.error(f"❌ Erro ao salvar histórico: {e}")
         return False
 
 def deletar_registro_historico(data_str):
@@ -333,7 +333,7 @@ def salvar_pedidos_detalhados(data_ref, df_pedidos):
         pedidos_json = df_clean.to_json(orient="records", force_ascii=False, date_format="iso")
         
         existing = supabase.table("historico_pedidos").select("id").eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
-        if existing:
+        if existing.data:
             supabase.table("historico_pedidos").delete().eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
         
         supabase.table("historico_pedidos").insert({
@@ -342,7 +342,7 @@ def salvar_pedidos_detalhados(data_ref, df_pedidos):
         }).execute()
         return True
     except Exception as e:
-        st.error(f" Erro ao salvar pedidos: {e}")
+        st.error(f"❌ Erro ao salvar pedidos: {e}")
         return False
 
 def carregar_pedidos_historico(data_ref):
@@ -353,7 +353,7 @@ def carregar_pedidos_historico(data_ref):
     try:
         response = supabase.table("historico_pedidos").select("pedido_json").eq("data_referencia", data_ref.strftime("%Y-%m-%d")).execute()
         
-        if not response:
+        if not response.data:
             return pd.DataFrame()
         
         pedidos_list = json.loads(response.data[0]["pedido_json"])
@@ -452,12 +452,12 @@ def visualizar_view_representante(df, representante, data_filtro=None):
             df["Dt. Neg."] = pd.to_datetime(df["Dt. Neg."], errors="coerce")
             df = df[df["Dt. Neg."].dt.strftime("%Y-%m-%d") == data_filtro]
         except:
-            st.warning(f"️ Data inválida: {data_filtro}")
+            st.warning(f"⚠️ Data inválida: {data_filtro}")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📋 Pedidos", len(df))
     with col2:
-        st.metric(" Valor Total", format_brl(df["Vlr. Nota"].sum()))
+        st.metric("💰 Valor Total", format_brl(df["Vlr. Nota"].sum()))
     with col3:
         medio = df["Vlr. Nota"].mean() if len(df) > 0 else 0
         st.metric("🎫 Ticket Médio", format_brl(medio))
@@ -481,7 +481,7 @@ def visualizar_view_representante(df, representante, data_filtro=None):
 # ── HEADER COM LOGO ───────────────────────────────────────────────────────────
 st.markdown(f"""
 <div class="page-header">
-    <img class="header-logo" src="image/png;base64,{logo_b64}" />
+    <img class="header-logo" src="data:image/png;base64,{logo_b64}" />
     <div>
         <h1>Relatório Financeiro da Produção</h1>
         <p class="subtitle">📡 Análise automática gerada a partir do Portal de Vendas — Sankhya</p>
@@ -544,7 +544,7 @@ if token_rep:
     else:
         st.sidebar.error("❌ Token inválido ou expirado")
 
-# ── DEBUG MODE ───────────────────────────────────────────────────────────────
+# ── DEBUG MODE ────────────────────────────────────────────────────────────────
 if "debug" in query_params:
     with st.expander("🔧 DEBUG MODE", expanded=True):
         st.markdown('<div class="debug-box">', unsafe_allow_html=True)
@@ -557,508 +557,348 @@ if "debug" in query_params:
 # ── ABAS PRINCIPAIS ───────────────────────────────────────────────────────────
 aba_hoje, aba_historico = st.tabs(["📋 Relatório do Dia", "📅 Histórico"])
 
-# ════════════════════════════════════════════════════════════════════════════
-# ABA 1 — RELATÓRIO DO DIA
+# ═════════════════════════════════════════════════════════════════════════════
+# ABA 1 — RELATÓRIO DO DIA (COM CONSULTA DE PEDIDOS DO HISTÓRICO)
 # ═════════════════════════════════════════════════════════════════════════════
 uploaded_file = None 
 with aba_hoje:
-    # ── SE FOR REPRESENTANTE: MOSTRAR APENAS CONSULTA DE PEDIDOS ──
-    if representante_logado:
-        st.markdown(f"""
-        <div class="rep-banner">
-            <span>👤</span>
-            <div>
-                <strong>Área do Representante</strong><br>
-                <small>{representante_logado['nome']} • Regiões: {', '.join(representante_logado['regioes'])}</small>
-            </div>
-            <span class="readonly-badge">🔒 Somente leitura</span>
-        </div>
+    # Lógica para representantes logados
+    if representante_logado and not uploaded_file:
+        st.info("📁 Faça upload do arquivo do dia para visualizar seus pedidos.")
+        uploaded_file = st.file_uploader("Selecionar arquivo .xlsx do Sankhya", type=["xlsx", "xls"], key="upload_rep")
+        if uploaded_file:
+            try:
+                df_raw = load_data(uploaded_file)
+                totais, df = calcular_totais(df_raw)
+                visualizar_view_representante(df, representante_logado, data_filtro_url)
+            except Exception as e:
+                st.error(f"Erro ao processar arquivo: {e}")
+        st.stop()
+    
+    # Upload para usuários normais
+    st.markdown('<span class="upload-label">&#128194; Selecionar arquivo do dia</span>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("", type=["xlsx", "xls"], label_visibility="collapsed", key="upload_normal")
+
+    if uploaded_file:
+        try:
+            df_raw = load_data(uploaded_file)
+            totais, df = calcular_totais(df_raw)
+            t = totais
+
+            CATEGORIAS_EXTRA = ["Atacado", "Credimoveis", "Carajás", "Outro"]
+            CORES_EXTRA = {"Atacado": "#1abc9c", "Credimoveis": "#e74c3c", "Carajás": "#f39c12", "Outro": "#7f8c8d"}
+
+            if "extras" not in st.session_state:
+                st.session_state.extras = []
+
+            with st.expander("➕ Adicionar valor extra (notas já faturadas fora da planilha)"):
+                col_e1, col_e2, col_e3, col_e4 = st.columns([2, 2, 3, 1])
+                with col_e1:
+                    extra_cat = st.selectbox("Categoria", CATEGORIAS_EXTRA, key="extra_cat_dia")
+                with col_e2:
+                    extra_val = st.number_input("Valor (R$)", min_value=0.0, step=100.0, format="%.2f", key="extra_val_dia")
+                with col_e3:
+                    extra_obs = st.text_input("Observação (opcional)", key="extra_obs_dia")
+                with col_e4:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    if st.button("Adicionar", key="btn_add_extra"):
+                        if extra_val > 0:
+                            st.session_state.extras.append({"categoria": extra_cat, "valor": extra_val, "obs": extra_obs})
+                            st.rerun()
+                if st.session_state.extras:
+                    st.markdown("**Valores adicionados:**")
+                    for i, ex in enumerate(st.session_state.extras):
+                        c1, c2 = st.columns([5, 1])
+                        with c1:
+                            obs_txt = f" — {ex['obs']}" if ex['obs'] else ""
+                            st.markdown(f"• **{ex['categoria']}**: {format_brl(ex['valor'])}{obs_txt}")
+                        with c2:
+                            if st.button("🗑️", key=f"del_extra_dia_{i}"):
+                                st.session_state.extras.pop(i)
+                                st.rerun()
+                    if st.button("🗑️ Limpar todos", key="btn_limpar_extras"):
+                        st.session_state.extras = []
+                        st.rerun()
+
+            extras_por_cat = {}
+            for ex in st.session_state.extras:
+                extras_por_cat[ex["categoria"]] = extras_por_cat.get(ex["categoria"], 0) + ex["valor"]
+            total_extras = sum(extras_por_cat.values())
+            total_geral_ajustado = t["total_geral"] + total_extras
+            pct = lambda v: f"{v/total_geral_ajustado*100:.1f}% do total" if total_geral_ajustado else "—"
+
+            df["_is_cheque"] = df["Descrição (Tipo de Negociação)"].str.upper().str.contains("CHEQUE", na=False)
+            total_cheque = df[df["_is_cheque"]]["Vlr. Nota"].sum()
+
+            col_data, col_salvar = st.columns([1, 2])
+            with col_data:
+                data_ref = st.date_input("📅 Data de referência deste relatório", value=datetime.today(), key="data_ref_dia")
+            with col_salvar:
+                st.markdown("<br>", unsafe_allow_html=True)
+                if st.button("💾  Salvar no histórico", key="btn_salvar_hist"):
+                    t_salvar = {**t, "total_geral": total_geral_ajustado}
+                    salvo = salvar_historico(data_ref, t_salvar, extras_por_cat, total_cheque)
+                    pedidos_salvos = salvar_pedidos_detalhados(data_ref, df)
+                    
+                    if salvo and pedidos_salvos:
+                        st.markdown(f'<div class="success-box"><strong>✅ Salvo com sucesso no Supabase!</strong><br>• Totais agregados<br>• <strong>{len(df)} pedidos detalhados</strong></div>', unsafe_allow_html=True)
+                    elif salvo:
+                        st.markdown('<span class="already-badge">⚠️ Totais salvos, mas houve erro ao salvar os detalhes dos pedidos.</span>', unsafe_allow_html=True)
+                    else:
+                        st.markdown('<span class="already-badge">⚠️ Já existe um registro para essa data ou erro ao salvar.</span>', unsafe_allow_html=True)
+
+            # KPI Cards
+            cards_extras_html = ""
+            for cat, val in extras_por_cat.items():
+                cor = CORES_EXTRA.get(cat, "#7f8c8d")
+                cards_extras_html += (
+                    f'<div class="kpi-card" style="border-top:4px solid {cor};">'
+                    f'<div class="kpi-label">&#128230; {cat}</div>'
+                    f'<div class="kpi-value">{format_brl(val)}</div>'
+                    f'<span class="kpi-badge">{pct(val)}</span>'
+                    f'</div>'
+                )
+
+            st.markdown(
+                '<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr);">'
+                '<div class="kpi-card total"><div class="kpi-label">&#128176; Total Geral</div>'
+                f'<div class="kpi-value">{format_brl(total_geral_ajustado)}</div><span class="kpi-badge">{t["qtd_notas"]} notas</span></div>'
+                '<div class="kpi-card assist"><div class="kpi-label">&#128296; Assistência</div>'
+                f'<div class="kpi-value">{format_brl(t["total_assistencia"])}</div><span class="kpi-badge">{pct(t["total_assistencia"])}</span></div>'
+                '<div class="kpi-card lojas"><div class="kpi-label">&#127978; Lojas</div>'
+                f'<div class="kpi-value">{format_brl(t["total_lojas"])}</div><span class="kpi-badge">{pct(t["total_lojas"])}</span></div>'
+                '<div class="kpi-card avista"><div class="kpi-label">&#128181; À Vista</div>'
+                f'<div class="kpi-value">{format_brl(t["total_a_vista"])}</div><span class="kpi-badge">{pct(t["total_a_vista"])}</span></div>'
+                '<div class="kpi-card boleto"><div class="kpi-label">&#128196; Boleto</div>'
+                f'<div class="kpi-value">{format_brl(t["total_boleto"])}</div><span class="kpi-badge">{pct(t["total_boleto"])}</span></div>'
+                '<div class="kpi-card comercial"><div class="kpi-label">&#129309; Comercial</div>'
+                f'<div class="kpi-value">{format_brl(t["total_comercial"])}</div><span class="kpi-badge">{pct(t["total_comercial"])}</span></div>'
+                f'<div class="kpi-card cheque"><div class="kpi-label">&#128179; Cheque</div><div class="kpi-value">{format_brl(total_cheque)}</div><span class="kpi-badge">{pct(total_cheque)}</span></div>'
+                + cards_extras_html + '</div>',
+                unsafe_allow_html=True
+            )
+
+            # Mix de Faturamento
+            st.markdown('<div class="sec-title">&#129383; Mix de Faturamento</div>', unsafe_allow_html=True)
+            total_outros = max(t["total_geral"] - (t["total_assistencia"] + t["total_lojas"] + t["total_a_vista"] + t["total_boleto"] + total_cheque), 0)
+            mix_labels = ["Boleto", "Lojas", "À Vista", "Assistência", "Cheque", "Outros"]
+            mix_values = [t["total_boleto"], t["total_lojas"], t["total_a_vista"], t["total_assistencia"], total_cheque, total_outros]
+            mix_cores = ["#2980b9", "#2ecc71", "#8e44ad", "#e07b3a", "#e74c3c", "#95a5a6"]
+            for cat, val in extras_por_cat.items():
+                mix_labels.append(cat); mix_values.append(val); mix_cores.append(CORES_EXTRA.get(cat, "#7f8c8d"))
+            mix_df = pd.DataFrame({"Categoria": mix_labels, "Valor": mix_values, "Cor": mix_cores})
+            mix_df = mix_df[mix_df["Valor"] > 0].reset_index(drop=True)
+            col_chart, col_table = st.columns([1.4, 1])
+            with col_chart:
+                fig_mix = go.Figure(go.Pie(labels=mix_df["Categoria"], values=mix_df["Valor"], hole=0.52, marker=dict(colors=mix_df["Cor"].tolist()), textposition="outside", textinfo="label+percent", hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>"))
+                fig_mix.update_layout(margin=dict(t=30, b=30, l=20, r=20), showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", size=12), height=400)
+                st.plotly_chart(fig_mix, use_container_width=True)
+            with col_table:
+                mix_tbl = mix_df[["Categoria", "Valor"]].copy()
+                mix_tbl["% do Total"] = (mix_tbl["Valor"] / total_geral_ajustado * 100).map("{:.1f}%".format)
+                mix_tbl["Valor"] = mix_tbl["Valor"].map(format_brl)
+                st.dataframe(mix_tbl, use_container_width=True, hide_index=True, height=400)
+
+            resumo_neg = df.groupby("Descrição (Tipo de Negociação)")["Vlr. Nota"].agg(Qtd="count", Total="sum").sort_values("Total", ascending=False).reset_index()
+            resumo_neg_tbl = resumo_neg.copy()
+            resumo_neg_tbl["% do Total"] = (resumo_neg_tbl["Total"] / t["total_geral"] * 100).map("{:.1f}%".format)
+            resumo_neg_tbl["Total"] = resumo_neg_tbl["Total"].map(format_brl)
+
+            # Notas de Assistência
+            st.markdown('<div class="sec-title">&#128296; Notas de Assistência</div>', unsafe_allow_html=True)
+            df_assist = df[df["_is_assistencia"]][["Nro. Nota", "Dt. Neg.", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)"]].copy()
+            df_assist["Vlr. Nota"] = df_assist["Vlr. Nota"].map(format_brl)
+            df_assist["Dt. Neg."] = pd.to_datetime(df_assist["Dt. Neg."], errors="coerce").dt.strftime("%d/%m/%Y")
+            st.dataframe(df_assist.rename(columns={"Nro. Nota": "Nota", "Dt. Neg.": "Data", "Nome Parceiro (Parceiro)": "Parceiro", "Descrição (Tipo de Negociação)": "Tipo Neg.", "Apelido (Vendedor)": "Vendedor"}), use_container_width=True, hide_index=True)
+
+            # Tabela Completa de Pedidos
+            st.markdown('<div class="sec-title">&#128203; Todos os Pedidos da Produção</div>', unsafe_allow_html=True)
+            col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+            with col_f1:
+                busca = st.text_input("🔍 Buscar parceiro ou nº único", placeholder="Ex: Magazine, 12345...", key="busca_dia")
+            with col_f2:
+                regioes_disponiveis = sorted(df["Regiao Vendedor"].dropna().unique().tolist())
+                filtro_regioes = st.multiselect("Região", options=regioes_disponiveis, default=regioes_disponiveis, placeholder="Selecione...", key="filtro_reg_dia")
+            with col_f3:
+                negociacoes = ["Todas"] + sorted(df["Descrição (Tipo de Negociação)"].dropna().unique().tolist())
+                filtro_neg = st.selectbox("Tipo de Negociação", negociacoes, key="filtro_neg_dia")
+
+            df_tabela = df.copy()
+            if busca:
+                mask_busca = df_tabela["Nome Parceiro (Parceiro)"].str.contains(busca, case=False, na=False) | df_tabela["Nro. Único"].astype(str).str.contains(busca, case=False, na=False)
+                df_tabela = df_tabela[mask_busca]
+            if filtro_regioes:
+                df_tabela = df_tabela[df_tabela["Regiao Vendedor"].isin(filtro_regioes)]
+            if filtro_neg != "Todas":
+                df_tabela = df_tabela[df_tabela["Descrição (Tipo de Negociação)"] == filtro_neg]
+
+            df_exibir = df_tabela[["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Descrição (Tipo de Operação)", "Apelido (Vendedor)", "Regiao Vendedor"]].copy()
+            df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+            df_exibir["Vlr. Nota"] = df_exibir["Vlr. Nota"].map(format_brl)
+            st.caption(f"Exibindo **{len(df_exibir)}** pedido(s)")
+            st.dataframe(df_exibir.rename(columns={"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Descrição (Tipo de Operação)": "Operação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}), use_container_width=True, hide_index=True, height=420)
+
+            # Exportar Resumo do Dia
+            st.markdown('<div class="sec-title">&#11015;&#65039; Exportar Resumo do Dia</div>', unsafe_allow_html=True)
+            categorias_export = ["Total Geral", "Assistência", "Lojas", "À Vista", "Boleto", "Comercial", "Cheque"]
+            valores_export = [total_geral_ajustado, t["total_assistencia"], t["total_lojas"], t["total_a_vista"], t["total_boleto"], t["total_comercial"], total_cheque]
+            for cat, val in extras_por_cat.items():
+                categorias_export.append(cat); valores_export.append(val)
+            resumo_export = pd.DataFrame({"Categoria": categorias_export, "Valor": valores_export})
+            resumo_export["% do Total"] = (resumo_export["Valor"] / total_geral_ajustado * 100).round(2)
+            resumo_export["Valor"] = resumo_export["Valor"].map(format_brl)
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                resumo_export.to_excel(writer, sheet_name="Resumo", index=False)
+                resumo_neg_tbl.to_excel(writer, sheet_name="Por Negociação", index=False)
+            st.download_button(label="⬇️ Baixar Resumo em Excel", data=buffer.getvalue(), file_name=f"resumo_financeiro_{data_ref.strftime('%d-%m-%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="btn_export_dia")
+
+        except Exception as e:
+            st.error(f"Erro ao processar o arquivo: {e}")
+    else:
+        st.markdown("""
+        <div class="info-box"><strong>Como usar:</strong> faça o upload do arquivo <code>.xlsx</code> exportado do Sankhya e clique em <strong>Salvar no histórico</strong>.<br><br>
+        💾 <strong>Os dados são salvos no Supabase</strong> e permanecem disponíveis permanentemente!</div>
         """, unsafe_allow_html=True)
-        
-        st.markdown("### 📋 Meus Pedidos")
-        st.info(f"📁 Visualizando pedidos das regiões: **{', '.join(representante_logado['regioes'])}**")
-        
-        # Seleção de data para o representante
-        col_data1, col_data2, col_btn = st.columns([2, 2, 1])
-        with col_data1:
-            hoje_rep = datetime.today().date()
-            data_inicio_rep = st.date_input(
-                "Período Início", 
-                value=hoje_rep - timedelta(days=7),
-                key="rep_data_inicio"
-            )
-        with col_data2:
-            data_fim_rep = st.date_input(
-                "Período Fim", 
-                value=hoje_rep,
-                key="rep_data_fim"
-            )
-        with col_btn:
-            st.markdown("<br>", unsafe_allow_html=True)
-            btn_carregar_rep = st.button("🔎 Carregar Meus Pedidos", key="btn_rep_carregar", type="primary", use_container_width=True)
-        
-        if btn_carregar_rep:
-            if data_inicio_rep > data_fim_rep:
-                st.error(" A data de início não pode ser maior que a data de fim.")
+    
+    # ──────────────────────────────────────────────────────────────────────
+    # NOVA SEÇÃO: CONSULTAR PEDIDOS DO HISTÓRICO (na tela inicial)
+    # ──────────────────────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown('<div class="sec-title">📅 Consultar Pedidos do Histórico</div>', unsafe_allow_html=True)
+    
+    # Seleção de Datas com Range
+    hoje_date = datetime.today().date()
+    datas_selecionadas = st.date_input(
+        "Selecione o período (Início e Fim)", 
+        value=(hoje_date, hoje_date),
+        key="datas_range_home"
+    )
+
+    # Extrair datas corretamente
+    if isinstance(datas_selecionadas, (tuple, list)) and len(datas_selecionadas) == 2:
+        data_inicio, data_fim = datas_selecionadas
+    else:
+        data_inicio = data_fim = datas_selecionadas if isinstance(datas_selecionadas, (date, datetime)) else hoje_date
+
+    col_btn, col_spacer = st.columns([1, 4])
+    with col_btn:
+        if st.button("🔎 Carregar Pedidos", key="btn_carregar_home", type="primary"):
+            if data_inicio > data_fim:
+                st.error("❌ A data de início não pode ser maior que a data de fim.")
             else:
-                with st.spinner("⏳ Buscando pedidos das suas regiões..."):
+                with st.spinner("⏳ Buscando pedidos..."):
                     try:
-                        data_inicio_str = data_inicio_rep.strftime("%Y-%m-%d")
-                        data_fim_str = data_fim_rep.strftime("%Y-%m-%d")
+                        data_inicio_str = data_inicio.strftime("%Y-%m-%d")
+                        data_fim_str = data_fim.strftime("%Y-%m-%d")
                         
-                        # Busca TODOS os pedidos do período
                         response = supabase.table("historico_pedidos")\
                             .select("data_referencia, pedido_json")\
                             .gte("data_referencia", data_inicio_str)\
                             .lte("data_referencia", data_fim_str)\
                             .execute()
                         
-                        if response:
+                        if response.data:
                             df_geral = pd.DataFrame()
                             total_pedidos = 0
                             
-                            for registro in response:
+                            for registro in response.data:
                                 try:
                                     lista_pedidos = json.loads(registro["pedido_json"])
                                     df_dia = pd.DataFrame(lista_pedidos)
-                                    
-                                    # ✅ FILTRAR APENAS PELAS REGIÕES DO REPRESENTANTE
-                                    if "Regiao Vendedor" in df_dia.columns:
-                                        df_filtrado_regiao = df_dia[
-                                            df_dia["Regiao Vendedor"].isin(representante_logado["regioes"])
-                                        ]
-                                        df_geral = pd.concat([df_geral, df_filtrado_regiao], ignore_index=True)
-                                        total_pedidos += len(df_filtrado_regiao)
-                                    else:
-                                        df_geral = pd.concat([df_geral, df_dia], ignore_index=True)
-                                        total_pedidos += len(df_dia)
+                                    df_geral = pd.concat([df_geral, df_dia], ignore_index=True)
+                                    total_pedidos += len(df_dia)
                                 except:
                                     pass 
                             
                             if not df_geral.empty:
-                                if data_inicio_rep == data_fim_rep:
-                                    msg_sucesso = f"✅ {total_pedidos} pedidos encontrados para {data_inicio_rep.strftime('%d/%m/%Y')}!"
+                                if data_inicio == data_fim:
+                                    msg_sucesso = f"✅ {total_pedidos} pedidos encontrados para {data_inicio.strftime('%d/%m/%Y')}!"
                                 else:
-                                    msg_sucesso = f"✅ {total_pedidos} pedidos encontrados entre {data_inicio_rep.strftime('%d/%m')} e {data_fim_rep.strftime('%d/%m')}!"
+                                    msg_sucesso = f"✅ {total_pedidos} pedidos encontrados entre {data_inicio.strftime('%d/%m')} e {data_fim.strftime('%d/%m')}!"
                                 
                                 st.success(msg_sucesso)
                                 
-                                # Guarda no session state
-                                st.session_state["df_rep_pedidos"] = df_geral
-                                st.session_state["rep_range_label"] = f"{data_inicio_rep.strftime('%d-%m')}_{data_fim_rep.strftime('%d-%m')}"
-                                st.session_state["rep_data_ref"] = data_fim_rep
-                                
-                                # Exibir tabela já filtrada
-                                cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", 
-                                             "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
-                                cols_disponiveis = [c for c in cols_exibir if c in df_geral.columns]
-                                df_exibir_rep = df_geral[cols_disponiveis].copy()
-                                
-                                # Formatar
-                                if "Previsão de entrega" in df_exibir_rep.columns:
-                                    df_exibir_rep["Previsão de entrega"] = pd.to_datetime(
-                                        df_exibir_rep["Previsão de entrega"], errors="coerce"
-                                    ).dt.strftime("%d/%m/%Y")
-                                if "Vlr. Nota" in df_exibir_rep.columns:
-                                    df_exibir_rep["Vlr. Nota"] = df_exibir_rep["Vlr. Nota"].map(format_brl)
-                                
-                                rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", 
-                                         "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor", 
-                                         "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
-                                df_exibir_rep = df_exibir_rep.rename(columns={k: v for k, v in rename.items() if k in df_exibir_rep.columns})
-                                
-                                st.dataframe(df_exibir_rep, use_container_width=True, hide_index=True, height=500)
-                                
-                                # KPIs para o representante
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("📋 Total de Pedidos", total_pedidos)
-                                with col2:
-                                    if "Vlr. Nota" in df_geral.columns:
-                                        total_valor = df_geral["Vlr. Nota"].sum()
-                                        st.metric("💰 Valor Total", format_brl(total_valor))
-                                    else:
-                                        st.metric("💰 Valor Total", "R$ 0,00")
-                                with col3:
-                                    if "Vlr. Nota" in df_geral.columns and total_pedidos > 0:
-                                        ticket = df_geral["Vlr. Nota"].mean()
-                                        st.metric("🎫 Ticket Médio", format_brl(ticket))
-                                    else:
-                                        st.metric("🎫 Ticket Médio", "R$ 0,00")
-                                
-                                # Exportação
-                                st.markdown("---")
-                                st.markdown("#### 📥 Exportar Meus Pedidos")
-                                col_pdf_rep, col_excel_rep = st.columns(2)
-                                
-                                with col_pdf_rep:
-                                    try:
-                                        pdf_bytes = gerar_pdf_pedidos(df_geral, st.session_state.get("rep_data_ref", hoje_rep))
-                                        st.download_button(
-                                            label="📄 Exportar (PDF)", 
-                                            data=pdf_bytes, 
-                                            file_name=f"meus_pedidos_{st.session_state['rep_range_label']}.pdf",
-                                            mime="application/pdf",
-                                            key="btn_rep_pdf",
-                                            use_container_width=True
-                                        )
-                                    except Exception as e:
-                                        st.error(f"Erro ao gerar PDF: {e}")
-                                        
-                                with col_excel_rep:
-                                    buffer = io.BytesIO()
-                                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                                        df_geral.to_excel(writer, sheet_name="Meus Pedidos", index=False)
-                                    st.download_button(
-                                        label="️ Exportar (Excel)", 
-                                        data=buffer.getvalue(), 
-                                        file_name=f"meus_pedidos_{st.session_state['rep_range_label']}.xlsx",
-                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                        key="btn_rep_excel",
-                                        use_container_width=True
-                                    )
+                                st.session_state["df_pedidos_home"] = df_geral
+                                st.session_state["range_label_home"] = f"{data_inicio.strftime('%d-%m')}_{data_fim.strftime('%d-%m')}"
+                                st.session_state["data_ref_pdf_home"] = data_fim
                                 
                             else:
-                                st.warning("⚠️ Nenhum pedido encontrado para suas regiões neste período.")
-                                st.session_state["df_rep_pedidos"] = None
+                                st.warning("⚠️ Nenhum pedido detalhado encontrado.")
+                                st.session_state["df_pedidos_home"] = None
                                 
                         else:
-                            st.warning("⚠️ Nenhum registro encontrado no banco de dados.")
-                            st.session_state["df_rep_pedidos"] = None
+                            st.warning("⚠️ Nenhum registro encontrado no banco de dados para este período.")
+                            st.session_state["df_pedidos_home"] = None
                             
                     except Exception as e:
                         st.error(f"❌ Erro ao conectar com banco: {e}")
-        
-        # Se já tiver pedidos carregados (após refresh), mostrar
-        elif st.session_state.get("df_rep_pedidos") is not None:
-            df_geral = st.session_state["df_rep_pedidos"]
-            st.success(f"📊 {len(df_geral)} pedidos carregados")
-    
-    # ── SE NÃO FOR REPRESENTANTE: FLUXO NORMAL DE UPLOAD ──
-    else:
-        st.markdown('<span class="upload-label">&#128194; Selecionar arquivo</span>', unsafe_allow_html=True)
-        uploaded_file = st.file_uploader("", type=["xlsx", "xls"], label_visibility="collapsed", key="upload_normal")
 
-        if uploaded_file:
+    # Exibição e Exportação dos pedidos consultados
+    if st.session_state.get("df_pedidos_home") is not None:
+        df_range = st.session_state["df_pedidos_home"]
+        
+        # Filtros rápidos
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            busca_range = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_home")
+        with col_f2:
+            if "Regiao Vendedor" in df_range.columns:
+                regioes_range = sorted(df_range["Regiao Vendedor"].dropna().unique().tolist())
+                filtro_reg_range = st.multiselect("Região", options=regioes_range, default=regioes_range, key="filtro_reg_home")
+        
+        df_filtrado_range = df_range.copy()
+        if busca_range:
+            mask = df_filtrado_range["Nome Parceiro (Parceiro)"].str.contains(busca_range, case=False, na=False) | \
+                   df_filtrado_range["Nro. Único"].astype(str).str.contains(busca_range, case=False, na=False)
+            df_filtrado_range = df_filtrado_range[mask]
+        if filtro_reg_range and "Regiao Vendedor" in df_filtrado_range.columns:
+            df_filtrado_range = df_filtrado_range[df_filtrado_range["Regiao Vendedor"].isin(filtro_reg_range)]
+        
+        # Exibir tabela
+        cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
+        cols_disponiveis = [c for c in cols_exibir if c in df_filtrado_range.columns]
+        df_exibir_range = df_filtrado_range[cols_disponiveis].copy()
+        
+        if "Previsão de entrega" in df_exibir_range.columns:
+            df_exibir_range["Previsão de entrega"] = pd.to_datetime(df_exibir_range["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+        if "Vlr. Nota" in df_exibir_range.columns:
+            df_exibir_range["Vlr. Nota"] = df_exibir_range["Vlr. Nota"].map(format_brl)
+        
+        rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
+                  "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
+        df_exibir_range = df_exibir_range.rename(columns={k: v for k, v in rename.items() if k in df_exibir_range.columns})
+        
+        st.dataframe(df_exibir_range, use_container_width=True, hide_index=True, height=400)
+        
+        # Exportação
+        st.markdown('<div class="sec-title">📥 Exportar Pedidos Consultados</div>', unsafe_allow_html=True)
+        col_pdf, col_excel = st.columns(2)
+        
+        with col_pdf:
             try:
-                df_raw = load_data(uploaded_file)
-                totais, df = calcular_totais(df_raw)
-                t = totais
-
-                CATEGORIAS_EXTRA = ["Atacado", "Credimoveis", "Carajás", "Outro"]
-                CORES_EXTRA = {"Atacado": "#1abc9c", "Credimoveis": "#e74c3c", "Carajás": "#f39c12", "Outro": "#7f8c8d"}
-
-                if "extras" not in st.session_state:
-                    st.session_state.extras = []
-
-                with st.expander("➕ Adicionar valor extra (notas já faturadas fora da planilha)"):
-                    col_e1, col_e2, col_e3, col_e4 = st.columns([2, 2, 3, 1])
-                    with col_e1:
-                        extra_cat = st.selectbox("Categoria", CATEGORIAS_EXTRA, key="extra_cat_dia")
-                    with col_e2:
-                        extra_val = st.number_input("Valor (R$)", min_value=0.0, step=100.0, format="%.2f", key="extra_val_dia")
-                    with col_e3:
-                        extra_obs = st.text_input("Observação (opcional)", key="extra_obs_dia")
-                    with col_e4:
-                        st.markdown("<br>", unsafe_allow_html=True)
-                        if st.button("Adicionar", key="btn_add_extra"):
-                            if extra_val > 0:
-                                st.session_state.extras.append({"categoria": extra_cat, "valor": extra_val, "obs": extra_obs})
-                                st.rerun()
-                    if st.session_state.extras:
-                        st.markdown("**Valores adicionados:**")
-                        for i, ex in enumerate(st.session_state.extras):
-                            c1, c2 = st.columns([5, 1])
-                            with c1:
-                                obs_txt = f" — {ex['obs']}" if ex['obs'] else ""
-                                st.markdown(f"• **{ex['categoria']}**: {format_brl(ex['valor'])}{obs_txt}")
-                            with c2:
-                                if st.button("🗑️", key=f"del_extra_dia_{i}"):
-                                    st.session_state.extras.pop(i)
-                                    st.rerun()
-                        if st.button("🗑️ Limpar todos", key="btn_limpar_extras"):
-                            st.session_state.extras = []
-                            st.rerun()
-
-                extras_por_cat = {}
-                for ex in st.session_state.extras:
-                    extras_por_cat[ex["categoria"]] = extras_por_cat.get(ex["categoria"], 0) + ex["valor"]
-                total_extras = sum(extras_por_cat.values())
-                total_geral_ajustado = t["total_geral"] + total_extras
-                pct = lambda v: f"{v/total_geral_ajustado*100:.1f}% do total" if total_geral_ajustado else "—"
-
-                df["_is_cheque"] = df["Descrição (Tipo de Negociação)"].str.upper().str.contains("CHEQUE", na=False)
-                total_cheque = df[df["_is_cheque"]]["Vlr. Nota"].sum()
-
-                col_data, col_salvar = st.columns([1, 2])
-                with col_data:
-                    data_ref = st.date_input("📅 Data de referência deste relatório", value=datetime.today(), key="data_ref_dia")
-                with col_salvar:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    if st.button("💾  Salvar no histórico", key="btn_salvar_hist"):
-                        t_salvar = {**t, "total_geral": total_geral_ajustado}
-                        salvo = salvar_historico(data_ref, t_salvar, extras_por_cat, total_cheque)
-                        pedidos_salvos = salvar_pedidos_detalhados(data_ref, df)
-                        
-                        if salvo and pedidos_salvos:
-                            st.markdown(f'<div class="success-box"><strong>✅ Salvo com sucesso no Supabase!</strong><br>• Totais agregados<br>• <strong>{len(df)} pedidos detalhados</strong></div>', unsafe_allow_html=True)
-                        elif salvo:
-                            st.markdown('<span class="already-badge">️ Totais salvos, mas houve erro ao salvar os detalhes dos pedidos.</span>', unsafe_allow_html=True)
-                        else:
-                            st.markdown('<span class="already-badge">⚠️ Já existe um registro para essa data ou erro ao salvar.</span>', unsafe_allow_html=True)
-
-                # KPI Cards
-                cards_extras_html = ""
-                for cat, val in extras_por_cat.items():
-                    cor = CORES_EXTRA.get(cat, "#7f8c8d")
-                    cards_extras_html += (
-                        f'<div class="kpi-card" style="border-top:4px solid {cor};">'
-                        f'<div class="kpi-label">&#128230; {cat}</div>'
-                        f'<div class="kpi-value">{format_brl(val)}</div>'
-                        f'<span class="kpi-badge">{pct(val)}</span>'
-                        f'</div>'
-                    )
-
-                st.markdown(
-                    '<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr);">'
-                    '<div class="kpi-card total"><div class="kpi-label">&#128176; Total Geral</div>'
-                    f'<div class="kpi-value">{format_brl(total_geral_ajustado)}</div><span class="kpi-badge">{t["qtd_notas"]} notas</span></div>'
-                    '<div class="kpi-card assist"><div class="kpi-label">&#128296; Assistência</div>'
-                    f'<div class="kpi-value">{format_brl(t["total_assistencia"])}</div><span class="kpi-badge">{pct(t["total_assistencia"])}</span></div>'
-                    '<div class="kpi-card lojas"><div class="kpi-label">&#127978; Lojas</div>'
-                    f'<div class="kpi-value">{format_brl(t["total_lojas"])}</div><span class="kpi-badge">{pct(t["total_lojas"])}</span></div>'
-                    '<div class="kpi-card avista"><div class="kpi-label">&#128181; À Vista</div>'
-                    f'<div class="kpi-value">{format_brl(t["total_a_vista"])}</div><span class="kpi-badge">{pct(t["total_a_vista"])}</span></div>'
-                    '<div class="kpi-card boleto"><div class="kpi-label">&#128196; Boleto</div>'
-                    f'<div class="kpi-value">{format_brl(t["total_boleto"])}</div><span class="kpi-badge">{pct(t["total_boleto"])}</span></div>'
-                    '<div class="kpi-card comercial"><div class="kpi-label">&#129309; Comercial</div>'
-                    f'<div class="kpi-value">{format_brl(t["total_comercial"])}</div><span class="kpi-badge">{pct(t["total_comercial"])}</span></div>'
-                    f'<div class="kpi-card cheque"><div class="kpi-label">&#128179; Cheque</div><div class="kpi-value">{format_brl(total_cheque)}</div><span class="kpi-badge">{pct(total_cheque)}</span></div>'
-                    + cards_extras_html + '</div>',
-                    unsafe_allow_html=True
-                )
-
-                # Mix de Faturamento
-                st.markdown('<div class="sec-title">&#129383; Mix de Faturamento</div>', unsafe_allow_html=True)
-                total_outros = max(t["total_geral"] - (t["total_assistencia"] + t["total_lojas"] + t["total_a_vista"] + t["total_boleto"] + total_cheque), 0)
-                mix_labels = ["Boleto", "Lojas", "À Vista", "Assistência", "Cheque", "Outros"]
-                mix_values = [t["total_boleto"], t["total_lojas"], t["total_a_vista"], t["total_assistencia"], total_cheque, total_outros]
-                mix_cores = ["#2980b9", "#2ecc71", "#8e44ad", "#e07b3a", "#e74c3c", "#95a5a6"]
-                for cat, val in extras_por_cat.items():
-                    mix_labels.append(cat); mix_values.append(val); mix_cores.append(CORES_EXTRA.get(cat, "#7f8c8d"))
-                mix_df = pd.DataFrame({"Categoria": mix_labels, "Valor": mix_values, "Cor": mix_cores})
-                mix_df = mix_df[mix_df["Valor"] > 0].reset_index(drop=True)
-                col_chart, col_table = st.columns([1.4, 1])
-                with col_chart:
-                    fig_mix = go.Figure(go.Pie(labels=mix_df["Categoria"], values=mix_df["Valor"], hole=0.52, marker=dict(colors=mix_df["Cor"].tolist()), textposition="outside", textinfo="label+percent", hovertemplate="<b>%{label}</b><br>R$ %{value:,.2f}<br>%{percent}<extra></extra>"))
-                    fig_mix.update_layout(margin=dict(t=30, b=30, l=20, r=20), showlegend=False, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="Inter, sans-serif", size=12), height=400)
-                    st.plotly_chart(fig_mix, use_container_width=True)
-                with col_table:
-                    mix_tbl = mix_df[["Categoria", "Valor"]].copy()
-                    mix_tbl["% do Total"] = (mix_tbl["Valor"] / total_geral_ajustado * 100).map("{:.1f}%".format)
-                    mix_tbl["Valor"] = mix_tbl["Valor"].map(format_brl)
-                    st.dataframe(mix_tbl, use_container_width=True, hide_index=True, height=400)
-
-                resumo_neg = df.groupby("Descrição (Tipo de Negociação)")["Vlr. Nota"].agg(Qtd="count", Total="sum").sort_values("Total", ascending=False).reset_index()
-                resumo_neg_tbl = resumo_neg.copy()
-                resumo_neg_tbl["% do Total"] = (resumo_neg_tbl["Total"] / t["total_geral"] * 100).map("{:.1f}%".format)
-                resumo_neg_tbl["Total"] = resumo_neg_tbl["Total"].map(format_brl)
-
-                # Notas de Assistência
-                st.markdown('<div class="sec-title">&#128296; Notas de Assistência</div>', unsafe_allow_html=True)
-                df_assist = df[df["_is_assistencia"]][["Nro. Nota", "Dt. Neg.", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Apelido (Vendedor)"]].copy()
-                df_assist["Vlr. Nota"] = df_assist["Vlr. Nota"].map(format_brl)
-                df_assist["Dt. Neg."] = pd.to_datetime(df_assist["Dt. Neg."], errors="coerce").dt.strftime("%d/%m/%Y")
-                st.dataframe(df_assist.rename(columns={"Nro. Nota": "Nota", "Dt. Neg.": "Data", "Nome Parceiro (Parceiro)": "Parceiro", "Descrição (Tipo de Negociação)": "Tipo Neg.", "Apelido (Vendedor)": "Vendedor"}), use_container_width=True, hide_index=True)
-
-                # Tabela Completa de Pedidos
-                st.markdown('<div class="sec-title">&#128203; Todos os Pedidos da Produção</div>', unsafe_allow_html=True)
-                col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
-                with col_f1:
-                    busca = st.text_input("🔍 Buscar parceiro ou nº único", placeholder="Ex: Magazine, 12345...", key="busca_dia")
-                with col_f2:
-                    regioes_disponiveis = sorted(df["Regiao Vendedor"].dropna().unique().tolist())
-                    filtro_regioes = st.multiselect("Região", options=regioes_disponiveis, default=regioes_disponiveis, placeholder="Selecione...", key="filtro_reg_dia")
-                with col_f3:
-                    negociacoes = ["Todas"] + sorted(df["Descrição (Tipo de Negociação)"].dropna().unique().tolist())
-                    filtro_neg = st.selectbox("Tipo de Negociação", negociacoes, key="filtro_neg_dia")
-
-                df_tabela = df.copy()
-                if busca:
-                    mask_busca = df_tabela["Nome Parceiro (Parceiro)"].str.contains(busca, case=False, na=False) | df_tabela["Nro. Único"].astype(str).str.contains(busca, case=False, na=False)
-                    df_tabela = df_tabela[mask_busca]
-                if filtro_regioes:
-                    df_tabela = df_tabela[df_tabela["Regiao Vendedor"].isin(filtro_regioes)]
-                if filtro_neg != "Todas":
-                    df_tabela = df_tabela[df_tabela["Descrição (Tipo de Negociação)"] == filtro_neg]
-
-                df_exibir = df_tabela[["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Descrição (Tipo de Operação)", "Apelido (Vendedor)", "Regiao Vendedor"]].copy()
-                df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
-                df_exibir["Vlr. Nota"] = df_exibir["Vlr. Nota"].map(format_brl)
-                st.caption(f"Exibindo **{len(df_exibir)}** pedido(s)")
-                st.dataframe(df_exibir.rename(columns={"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", "Vlr. Nota": "Valor", "Descrição (Tipo de Negociação)": "Negociação", "Descrição (Tipo de Operação)": "Operação", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}), use_container_width=True, hide_index=True, height=420)
-
-                # Exportar Resumo do Dia
-                st.markdown('<div class="sec-title">&#11015;&#65039; Exportar Resumo do Dia</div>', unsafe_allow_html=True)
-                categorias_export = ["Total Geral", "Assistência", "Lojas", "À Vista", "Boleto", "Comercial", "Cheque"]
-                valores_export = [total_geral_ajustado, t["total_assistencia"], t["total_lojas"], t["total_a_vista"], t["total_boleto"], t["total_comercial"], total_cheque]
-                for cat, val in extras_por_cat.items():
-                    categorias_export.append(cat); valores_export.append(val)
-                resumo_export = pd.DataFrame({"Categoria": categorias_export, "Valor": valores_export})
-                resumo_export["% do Total"] = (resumo_export["Valor"] / total_geral_ajustado * 100).round(2)
-                resumo_export["Valor"] = resumo_export["Valor"].map(format_brl)
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                    resumo_export.to_excel(writer, sheet_name="Resumo", index=False)
-                    resumo_neg_tbl.to_excel(writer, sheet_name="Por Negociação", index=False)
-                st.download_button(label="⬇️ Baixar Resumo em Excel", data=buffer.getvalue(), file_name=f"resumo_financeiro_{data_ref.strftime('%d-%m-%Y')}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key="btn_export_dia")
-
-            except Exception as e:
-                st.error(f"Erro ao processar o arquivo: {e}")
-        else:
-            st.markdown("""
-            <div class="info-box"><strong>Como usar:</strong> faça o upload do arquivo <code>.xlsx</code> exportado do Sankhya e clique em <strong>Salvar no histórico</strong>.<br><br>
-            💾 <strong>Os dados são salvos no Supabase</strong> e permanecem disponíveis permanentemente!</div>
-            """, unsafe_allow_html=True)
-        
-        # ─────────────────────────────────────────────────────────────────────
-        # NOVA SEÇÃO: CONSULTAR PEDIDOS DO HISTÓRICO (na tela inicial)
-        # ──────────────────────────────────────────────────────────────────────
-        st.markdown("---")
-        st.markdown('<div class="sec-title">📅 Consultar Pedidos do Histórico</div>', unsafe_allow_html=True)
-        
-        # Seleção de Datas com Range
-        hoje_date = datetime.today().date()
-        datas_selecionadas = st.date_input(
-            "Selecione o período (Início e Fim)", 
-            value=(hoje_date, hoje_date),
-            key="datas_range_home"
-        )
-
-        # Extrair datas corretamente
-        if isinstance(datas_selecionadas, (tuple, list)) and len(datas_selecionadas) == 2:
-            data_inicio, data_fim = datas_selecionadas
-        else:
-            data_inicio = data_fim = datas_selecionadas if isinstance(datas_selecionadas, (date, datetime)) else hoje_date
-
-        col_btn, col_spacer = st.columns([1, 4])
-        with col_btn:
-            if st.button("🔎 Carregar Pedidos", key="btn_carregar_home", type="primary"):
-                if data_inicio > data_fim:
-                    st.error("❌ A data de início não pode ser maior que a data de fim.")
-                else:
-                    with st.spinner("⏳ Buscando pedidos..."):
-                        try:
-                            data_inicio_str = data_inicio.strftime("%Y-%m-%d")
-                            data_fim_str = data_fim.strftime("%Y-%m-%d")
-                            
-                            response = supabase.table("historico_pedidos")\
-                                .select("data_referencia, pedido_json")\
-                                .gte("data_referencia", data_inicio_str)\
-                                .lte("data_referencia", data_fim_str)\
-                                .execute()
-                            
-                            if response:
-                                df_geral = pd.DataFrame()
-                                total_pedidos = 0
-                                
-                                for registro in response:
-                                    try:
-                                        lista_pedidos = json.loads(registro["pedido_json"])
-                                        df_dia = pd.DataFrame(lista_pedidos)
-                                        df_geral = pd.concat([df_geral, df_dia], ignore_index=True)
-                                        total_pedidos += len(df_dia)
-                                    except:
-                                        pass 
-                                
-                                if not df_geral.empty:
-                                    if data_inicio == data_fim:
-                                        msg_sucesso = f"✅ {total_pedidos} pedidos encontrados para {data_inicio.strftime('%d/%m/%Y')}!"
-                                    else:
-                                        msg_sucesso = f"✅ {total_pedidos} pedidos encontrados entre {data_inicio.strftime('%d/%m')} e {data_fim.strftime('%d/%m')}!"
-                                    
-                                    st.success(msg_sucesso)
-                                    
-                                    st.session_state["df_pedidos_home"] = df_geral
-                                    st.session_state["range_label_home"] = f"{data_inicio.strftime('%d-%m')}_{data_fim.strftime('%d-%m')}"
-                                    st.session_state["data_ref_pdf_home"] = data_fim
-                                    
-                                else:
-                                    st.warning("⚠️ Nenhum pedido detalhado encontrado.")
-                                    st.session_state["df_pedidos_home"] = None
-                                    
-                            else:
-                                st.warning("⚠️ Nenhum registro encontrado no banco de dados para este período.")
-                                st.session_state["df_pedidos_home"] = None
-                                
-                        except Exception as e:
-                            st.error(f"❌ Erro ao conectar com banco: {e}")
-
-        # Exibição e Exportação dos pedidos consultados
-        if st.session_state.get("df_pedidos_home") is not None:
-            df_range = st.session_state["df_pedidos_home"]
-            
-            # Filtros rápidos
-            col_f1, col_f2 = st.columns(2)
-            with col_f1:
-                busca_range = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_home")
-            with col_f2:
-                if "Regiao Vendedor" in df_range.columns:
-                    regioes_range = sorted(df_range["Regiao Vendedor"].dropna().unique().tolist())
-                    filtro_reg_range = st.multiselect("Região", options=regioes_range, default=regioes_range, key="filtro_reg_home")
-            
-            df_filtrado_range = df_range.copy()
-            if busca_range:
-                mask = df_filtrado_range["Nome Parceiro (Parceiro)"].str.contains(busca_range, case=False, na=False) | \
-                       df_filtrado_range["Nro. Único"].astype(str).str.contains(busca_range, case=False, na=False)
-                df_filtrado_range = df_filtrado_range[mask]
-            if filtro_reg_range and "Regiao Vendedor" in df_filtrado_range.columns:
-                df_filtrado_range = df_filtrado_range[df_filtrado_range["Regiao Vendedor"].isin(filtro_reg_range)]
-            
-            # Exibir tabela
-            cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
-            cols_disponiveis = [c for c in cols_exibir if c in df_filtrado_range.columns]
-            df_exibir_range = df_filtrado_range[cols_disponiveis].copy()
-            
-            if "Previsão de entrega" in df_exibir_range.columns:
-                df_exibir_range["Previsão de entrega"] = pd.to_datetime(df_exibir_range["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
-            if "Vlr. Nota" in df_exibir_range.columns:
-                df_exibir_range["Vlr. Nota"] = df_exibir_range["Vlr. Nota"].map(format_brl)
-            
-            rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
-                      "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
-            df_exibir_range = df_exibir_range.rename(columns={k: v for k, v in rename.items() if k in df_exibir_range.columns})
-            
-            st.dataframe(df_exibir_range, use_container_width=True, hide_index=True, height=400)
-            
-            # Exportação
-            st.markdown('<div class="sec-title">📥 Exportar Pedidos Consultados</div>', unsafe_allow_html=True)
-            col_pdf, col_excel = st.columns(2)
-            
-            with col_pdf:
-                try:
-                    pdf_bytes = gerar_pdf_pedidos(df_filtrado_range, st.session_state.get("data_ref_pdf_home", hoje_date))
-                    st.download_button(
-                        label="📄 Exportar Pedidos (PDF)", 
-                        data=pdf_bytes, 
-                        file_name=f"pedidos_{st.session_state['range_label_home']}.pdf",
-                        mime="application/pdf",
-                        key="btn_pdf_home"
-                    )
-                except Exception as e:
-                    st.error(f"Erro ao gerar PDF: {e}")
-                    
-            with col_excel:
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                    df_filtrado_range.to_excel(writer, sheet_name="Pedidos", index=False)
+                pdf_bytes = gerar_pdf_pedidos(df_filtrado_range, st.session_state.get("data_ref_pdf_home", hoje_date))
                 st.download_button(
-                    label="️ Exportar Pedidos (Excel)", 
-                    data=buffer.getvalue(), 
-                    file_name=f"pedidos_{st.session_state['range_label_home']}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    key="btn_excel_home"
+                    label="📄 Exportar Pedidos (PDF)", 
+                    data=pdf_bytes, 
+                    file_name=f"pedidos_{st.session_state['range_label_home']}.pdf",
+                    mime="application/pdf",
+                    key="btn_pdf_home"
                 )
+            except Exception as e:
+                st.error(f"Erro ao gerar PDF: {e}")
+                
+        with col_excel:
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_filtrado_range.to_excel(writer, sheet_name="Pedidos", index=False)
+            st.download_button(
+                label="⬇️ Exportar Pedidos (Excel)", 
+                data=buffer.getvalue(), 
+                file_name=f"pedidos_{st.session_state['range_label_home']}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="btn_excel_home"
+            )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ABA 2 — HISTÓRICO
@@ -1066,7 +906,7 @@ with aba_hoje:
 with aba_historico:
     hist = carregar_historico()
     if hist.empty:
-        st.info(" Nenhum histórico ainda. Faça upload e clique em **Salvar no histórico**.")
+        st.info("📭 Nenhum histórico ainda. Faça upload e clique em **Salvar no histórico**.")
     else:
         hist["data_dt"] = pd.to_datetime(hist["data"], format="%Y-%m-%d", errors="coerce")
         hist_sorted = hist.sort_values("data_dt")
@@ -1125,7 +965,7 @@ with aba_historico:
             st.markdown('<div class="sec-title">&#11015;&#65039; Exportar Histórico</div>', unsafe_allow_html=True)
             buf_hist = io.BytesIO()
             tbl.to_excel(buf_hist, index=False, engine="openpyxl")
-            st.download_button(label="️ Baixar Histórico em Excel", data=buf_hist.getvalue(), file_name=f"historico_financeiro_{data_de}_{data_ate}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(label="⬇️ Baixar Histórico em Excel", data=buf_hist.getvalue(), file_name=f"historico_financeiro_{data_de}_{data_ate}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             
             with st.expander("🗑️ Remover um registro"):
                 datas_disp = h["data_fmt"].tolist()
@@ -1143,133 +983,131 @@ with aba_historico:
             st.markdown('<div class="sec-title">📅 Consultar Pedidos</div>', unsafe_allow_html=True)
 
             # Seleção de Datas com Range
-            hoje_date_hist = datetime.today().date()
-            datas_selecionadas_hist = st.date_input(
+            hoje_date = datetime.today().date()
+            datas_selecionadas = st.date_input(
                 "Selecione o período (Início e Fim)", 
-                value=(hoje_date_hist, hoje_date_hist),
-                key="datas_range_hist"
+                value=(hoje_date, hoje_date),
+                key="datas_range_picker"
             )
 
             # Extrair datas corretamente
-            if isinstance(datas_selecionadas_hist, (tuple, list)) and len(datas_selecionadas_hist) == 2:
-                data_inicio_hist, data_fim_hist = datas_selecionadas_hist
+            if isinstance(datas_selecionadas, (tuple, list)) and len(datas_selecionadas) == 2:
+                data_inicio, data_fim = datas_selecionadas
             else:
-                data_inicio_hist = data_fim_hist = datas_selecionadas_hist if isinstance(datas_selecionadas_hist, (date, datetime)) else hoje_date_hist
+                data_inicio = data_fim = datas_selecionadas if isinstance(datas_selecionadas, (date, datetime)) else hoje_date
 
-            col_btn_hist, col_spacer_hist = st.columns([1, 4])
-            with col_btn_hist:
-                if st.button("🔎 Carregar Pedidos", key="btn_carregar_hist", type="primary"):
-                    if data_inicio_hist > data_fim_hist:
+            col_btn, col_spacer = st.columns([1, 4])
+            with col_btn:
+                if st.button("🔎 Carregar Pedidos", key="btn_carregar_periodo", type="primary"):
+                    if data_inicio > data_fim:
                         st.error("❌ A data de início não pode ser maior que a data de fim.")
                     else:
                         with st.spinner("⏳ Buscando pedidos..."):
                             try:
-                                data_inicio_str_hist = data_inicio_hist.strftime("%Y-%m-%d")
-                                data_fim_str_hist = data_fim_hist.strftime("%Y-%m-%d")
+                                data_inicio_str = data_inicio.strftime("%Y-%m-%d")
+                                data_fim_str = data_fim.strftime("%Y-%m-%d")
                                 
                                 response = supabase.table("historico_pedidos")\
                                     .select("data_referencia, pedido_json")\
-                                    .gte("data_referencia", data_inicio_str_hist)\
-                                    .lte("data_referencia", data_fim_str_hist)\
+                                    .gte("data_referencia", data_inicio_str)\
+                                    .lte("data_referencia", data_fim_str)\
                                     .execute()
                                 
-                                if response:
-                                    df_geral_hist = pd.DataFrame()
-                                    total_pedidos_hist = 0
+                                if response.data:
+                                    df_geral = pd.DataFrame()
+                                    total_pedidos = 0
                                     
                                     for registro in response.data:
                                         try:
-                                            lista_pedidos_hist = json.loads(registro["pedido_json"])
-                                            df_dia_hist = pd.DataFrame(lista_pedidos_hist)
-                                            df_geral_hist = pd.concat([df_geral_hist, df_dia_hist], ignore_index=True)
-                                            total_pedidos_hist += len(df_dia_hist)
+                                            lista_pedidos = json.loads(registro["pedido_json"])
+                                            df_dia = pd.DataFrame(lista_pedidos)
+                                            df_geral = pd.concat([df_geral, df_dia], ignore_index=True)
+                                            total_pedidos += len(df_dia)
                                         except:
                                             pass 
                                     
-                                    if not df_geral_hist.empty:
-                                        if data_inicio_hist == data_fim_hist:
-                                            msg_sucesso_hist = f"✅ {total_pedidos_hist} pedidos encontrados para {data_inicio_hist.strftime('%d/%m/%Y')}!"
+                                    if not df_geral.empty:
+                                        if data_inicio == data_fim:
+                                            msg_sucesso = f"✅ {total_pedidos} pedidos encontrados para {data_inicio.strftime('%d/%m/%Y')}!"
                                         else:
-                                            msg_sucesso_hist = f"✅ {total_pedidos_hist} pedidos encontrados entre {data_inicio_hist.strftime('%d/%m')} e {data_fim_hist.strftime('%d/%m')}!"
+                                            msg_sucesso = f"✅ {total_pedidos} pedidos encontrados entre {data_inicio.strftime('%d/%m')} e {data_fim.strftime('%d/%m')}!"
                                         
-                                        st.success(msg_sucesso_hist)
+                                        st.success(msg_sucesso)
                                         
-                                        st.session_state["df_pedidos_hist"] = df_geral_hist
-                                        st.session_state["range_label_hist"] = f"{data_inicio_hist.strftime('%d-%m')}_{data_fim_hist.strftime('%d-%m')}"
-                                        st.session_state["data_ref_pdf_hist"] = data_fim_hist
+                                        st.session_state["df_pedidos_range"] = df_geral
+                                        st.session_state["range_label"] = f"{data_inicio.strftime('%d-%m')}_{data_fim.strftime('%d-%m')}"
+                                        st.session_state["data_ref_pdf"] = data_fim
                                         
                                     else:
-                                        st.warning("️ Nenhum pedido detalhado encontrado.")
-                                        st.session_state["df_pedidos_hist"] = None
+                                        st.warning("⚠️ Nenhum pedido detalhado encontrado.")
+                                        st.session_state["df_pedidos_range"] = None
                                         
                                 else:
                                     st.warning("⚠️ Nenhum registro encontrado no banco de dados para este período.")
-                                    st.session_state["df_pedidos_hist"] = None
+                                    st.session_state["df_pedidos_range"] = None
                                     
                             except Exception as e:
                                 st.error(f"❌ Erro ao conectar com banco: {e}")
 
             # Exibição e Exportação
-            if st.session_state.get("df_pedidos_hist") is not None:
-                df_range_hist = st.session_state["df_pedidos_hist"]
+            if st.session_state.get("df_pedidos_range") is not None:
+                df_range = st.session_state["df_pedidos_range"]
                 
-                col_f1_hist, col_f2_hist = st.columns(2)
-                with col_f1_hist:
-                    busca_range_hist = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_hist")
-                with col_f2_hist:
-                    if "Regiao Vendedor" in df_range_hist.columns:
-                        regioes_range_hist = sorted(df_range_hist["Regiao Vendedor"].dropna().unique().tolist())
-                        filtro_reg_range_hist = st.multiselect("Região", options=regioes_range_hist, default=regioes_range_hist, key="filtro_reg_hist")
+                col_f1, col_f2 = st.columns(2)
+                with col_f1:
+                    busca_range = st.text_input("🔍 Buscar parceiro ou nº único", key="busca_range")
+                with col_f2:
+                    if "Regiao Vendedor" in df_range.columns:
+                        regioes_range = sorted(df_range["Regiao Vendedor"].dropna().unique().tolist())
+                        filtro_reg_range = st.multiselect("Região", options=regioes_range, default=regioes_range, key="filtro_reg_range")
                 
-                df_filtrado_range_hist = df_range_hist.copy()
-                if busca_range_hist:
-                    mask_hist = df_filtrado_range_hist["Nome Parceiro (Parceiro)"].str.contains(busca_range_hist, case=False, na=False) | \
-                           df_filtrado_range_hist["Nro. Único"].astype(str).str.contains(busca_range_hist, case=False, na=False)
-                    df_filtrado_range_hist = df_filtrado_range_hist[mask_hist]
-                if filtro_reg_range_hist and "Regiao Vendedor" in df_filtrado_range_hist.columns:
-                    df_filtrado_range_hist = df_filtrado_range_hist[df_filtrado_range_hist["Regiao Vendedor"].isin(filtro_reg_range_hist)]
+                df_filtrado_range = df_range.copy()
+                if busca_range:
+                    mask = df_filtrado_range["Nome Parceiro (Parceiro)"].str.contains(busca_range, case=False, na=False) | \
+                           df_filtrado_range["Nro. Único"].astype(str).str.contains(busca_range, case=False, na=False)
+                    df_filtrado_range = df_filtrado_range[mask]
+                if filtro_reg_range and "Regiao Vendedor" in df_filtrado_range.columns:
+                    df_filtrado_range = df_filtrado_range[df_filtrado_range["Regiao Vendedor"].isin(filtro_reg_range)]
                 
-                cols_exibir_hist = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
-                cols_disponiveis_hist = [c for c in cols_exibir_hist if c in df_filtrado_range_hist.columns]
-                df_exibir_range_hist = df_filtrado_range_hist[cols_disponiveis_hist].copy()
+                cols_exibir = ["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Apelido (Vendedor)", "Regiao Vendedor"]
+                cols_disponiveis = [c for c in cols_exibir if c in df_filtrado_range.columns]
+                df_exibir_range = df_filtrado_range[cols_disponiveis].copy()
                 
-                if "Previsão de entrega" in df_exibir_range_hist.columns:
-                    df_exibir_range_hist["Previsão de entrega"] = pd.to_datetime(df_exibir_range_hist["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
-                if "Vlr. Nota" in df_exibir_range_hist.columns:
-                    df_exibir_range_hist["Vlr. Nota"] = df_exibir_range_hist["Vlr. Nota"].map(format_brl)
+                if "Previsão de entrega" in df_exibir_range.columns:
+                    df_exibir_range["Previsão de entrega"] = pd.to_datetime(df_exibir_range["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
+                if "Vlr. Nota" in df_exibir_range.columns:
+                    df_exibir_range["Vlr. Nota"] = df_exibir_range["Vlr. Nota"].map(format_brl)
                 
-                rename_hist = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
-                              "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
-                df_exibir_range_hist = df_exibir_range_hist.rename(columns={k: v for k, v in rename_hist.items() if k in df_exibir_range_hist.columns})
+                rename = {"Nro. Único": "Nº Único", "Previsão de entrega": "Prev. Entrega", "Nome Parceiro (Parceiro)": "Parceiro", 
+                          "Vlr. Nota": "Valor", "Apelido (Vendedor)": "Vendedor", "Regiao Vendedor": "Região"}
+                df_exibir_range = df_exibir_range.rename(columns={k: v for k, v in rename.items() if k in df_exibir_range.columns})
                 
-                st.dataframe(df_exibir_range_hist, use_container_width=True, hide_index=True, height=400)
+                st.dataframe(df_exibir_range, use_container_width=True, hide_index=True, height=400)
                 
                 st.markdown('<div class="sec-title">📥 Exportar</div>', unsafe_allow_html=True)
-                col_pdf_hist, col_excel_hist = st.columns(2)
+                col_pdf, col_excel = st.columns(2)
                 
-                with col_pdf_hist:
+                with col_pdf:
                     try:
-                        pdf_bytes_hist = gerar_pdf_pedidos(df_filtrado_range_hist, st.session_state.get("data_ref_pdf_hist", hoje_date_hist))
+                        pdf_bytes = gerar_pdf_pedidos(df_filtrado_range, st.session_state.get("data_ref_pdf", hoje_date))
                         st.download_button(
-                            label=" Exportar Pedidos (PDF)", 
-                            data=pdf_bytes_hist, 
-                            file_name=f"pedidos_{st.session_state['range_label_hist']}.pdf",
-                            mime="application/pdf",
-                            key="btn_pdf_hist"
+                            label="📄 Exportar Pedidos (PDF)", 
+                            data=pdf_bytes, 
+                            file_name=f"pedidos_{st.session_state['range_label']}.pdf",
+                            mime="application/pdf"
                         )
                     except Exception as e:
                         st.error(f"Erro ao gerar PDF: {e}")
                         
-                with col_excel_hist:
-                    buffer_hist = io.BytesIO()
-                    with pd.ExcelWriter(buffer_hist, engine="openpyxl") as writer:
-                        df_filtrado_range_hist.to_excel(writer, sheet_name="Pedidos", index=False)
+                with col_excel:
+                    buffer = io.BytesIO()
+                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                        df_filtrado_range.to_excel(writer, sheet_name="Pedidos", index=False)
                     st.download_button(
                         label="⬇️ Exportar Pedidos (Excel)", 
-                        data=buffer_hist.getvalue(), 
-                        file_name=f"pedidos_{st.session_state['range_label_hist']}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        key="btn_excel_hist"
+                        data=buffer.getvalue(), 
+                        file_name=f"pedidos_{st.session_state['range_label']}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1294,7 +1132,7 @@ if not representante_logado:
                     salvar_representantes_csv(token, novo_nome, regioes_str)
                     link_representante = f"{APP_URL}/?token={token}"
                     st.success(f"✅ Token gerado para {novo_nome}!")
-                    st.markdown("** Link de acesso:**")
+                    st.markdown("**🔗 Link de acesso:**")
                     st.text_input("📋 Clique para copiar:", value=link_representante, label_visibility="collapsed")
                     with st.expander("📋 Como usar"):
                         st.markdown(f"1. Copie o link\n2. Envie para **{novo_nome}**\n3. Ele verá apenas pedidos das regiões: {', '.join(novo_regioes) if novo_regioes else 'Todas'}")
