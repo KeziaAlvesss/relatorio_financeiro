@@ -140,6 +140,9 @@ def is_boleto(tipo):
     if not pd.notna(tipo):
         return False
     t = str(tipo).upper()
+    # Exclui cheques e à vista
+    if "CHEQUE" in t or "À VISTA" in t or "A VISTA" in t or "PIX" in t or "CARTÃO" in t:
+        return False
     return bool("DIAS" in t or "GRANDES REDES" in t or re.search(r'\d+/\d+', t))
 
 def is_a_vista(tipo):
