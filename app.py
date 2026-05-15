@@ -148,7 +148,20 @@ def is_a_vista(tipo):
 
 def load_data(file):
     df = pd.read_excel(file, header=2)
+    
+    # Remove linhas onde "Nro. Único" é NaN ou vazio (linhas de total/cabeçalho)
+    df = df[df["Nro. Único"].notna()].copy()
+    df = df[df["Nro. Único"] != ""].copy()
+    
+    # Remove linhas que parecem ser totais (onde "Nro. Único" é numérico mas muito grande ou texto de total)
+    df = df[~df["Nro. Único"].astype(str).str.contains("TOTAL|total|Total", na=False)].copy()
+    
+    # Converte valor da nota para numérico
     df["Vlr. Nota"] = pd.to_numeric(df["Vlr. Nota"], errors="coerce").fillna(0)
+    
+    # Remove linhas com valor zero ou negativo (linhas de formatação)
+    df = df[df["Vlr. Nota"] > 0].copy()
+    
     return df
 
 def calcular_totais(df):
