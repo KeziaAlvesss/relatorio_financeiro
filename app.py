@@ -736,8 +736,8 @@ with aba_hoje:
                 regioes_disponiveis = sorted(df["Regiao Vendedor"].dropna().unique().tolist())
                 filtro_regioes = st.multiselect("Região", options=regioes_disponiveis, default=regioes_disponiveis, placeholder="Selecione...", key="filtro_reg_dia")
             with col_f3:
-                negociacoes = ["Todas"] + sorted(df["Descrição (Tipo de Negociação)"].dropna().unique().tolist())
-                filtro_neg = st.selectbox("Tipo de Negociação", negociacoes, key="filtro_neg_dia")
+                operacoes = ["Todas"] + sorted(df["Descrição (Tipo de Operação)"].dropna().unique().tolist())
+                filtro_op = st.selectbox("Operação", operacoes, key="filtro_op_dia")
 
             df_tabela = df.copy()
             if busca:
@@ -745,8 +745,8 @@ with aba_hoje:
                 df_tabela = df_tabela[mask_busca]
             if filtro_regioes:
                 df_tabela = df_tabela[df_tabela["Regiao Vendedor"].isin(filtro_regioes)]
-            if filtro_neg != "Todas":
-                df_tabela = df_tabela[df_tabela["Descrição (Tipo de Negociação)"] == filtro_neg]
+            if filtro_op != "Todas":
+                df_tabela = df_tabela[df_tabela["Descrição (Tipo de Operação)"] == filtro_op]
 
             df_exibir = df_tabela[["Nro. Único", "Previsão de entrega", "Nome Parceiro (Parceiro)", "Vlr. Nota", "Descrição (Tipo de Negociação)", "Descrição (Tipo de Operação)", "Apelido (Vendedor)", "Regiao Vendedor"]].copy()
             df_exibir["Previsão de entrega"] = pd.to_datetime(df_exibir["Previsão de entrega"], errors="coerce").dt.strftime("%d/%m/%Y")
