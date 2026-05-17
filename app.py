@@ -180,6 +180,7 @@ def calcular_totais(df):
     df["_is_comercial_avista"] = (
         df["_is_a_vista"] & 
         df["Regiao Vendedor"].str.upper().str.strip().isin(regioes_comercial_avista)
+        | (df["Regiao Vendedor"].str.upper().str.strip() == "DIRETORIA")
     )
     
     return {
