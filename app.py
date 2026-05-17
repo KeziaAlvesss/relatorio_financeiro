@@ -173,7 +173,10 @@ def calcular_totais(df):
     df["_is_loja"]        = df["Regiao Vendedor"].str.upper().str.strip() == "LOJAS"
     df["_is_a_vista"]     = df["Descrição (Tipo de Negociação)"].apply(is_a_vista)
     df["_is_boleto"]      = df["Descrição (Tipo de Negociação)"].apply(is_boleto)
-    df["_is_comercial"]   = df["Regiao Vendedor"].str.upper().str.contains("REGIAO", na=False)
+    df["_is_comercial"]   = (
+        df["Regiao Vendedor"].str.upper().str.contains("REGIAO", na=False) |
+        (df["Regiao Vendedor"].str.upper().str.strip() == "DIRETORIA")
+    )
     
     # ✅ NOVA FLAG: À Vista APENAS do Comercial (Regiões 1, 2, 3 e Diretoria)
     regioes_comercial_avista = ["REGIAO 1", "REGIAO 2", "REGIAO 3", "DIRETORIA"]
