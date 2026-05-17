@@ -168,30 +168,35 @@ def load_data(file):
     return df
 
 def calcular_totais(df):
-    # Flags existentes
+    # Flags de identificação
     df["_is_assistencia"] = df["Descrição (Tipo de Operação)"].str.upper().str.contains("ASSISTENCIA", na=False)
     df["_is_loja"]        = df["Regiao Vendedor"].str.upper().str.strip() == "LOJAS"
     df["_is_a_vista"]     = df["Descrição (Tipo de Negociação)"].apply(is_a_vista)
     df["_is_boleto"]      = df["Descrição (Tipo de Negociação)"].apply(is_boleto)
-    df["_is_comercial"]   = df["Regiao Vendedor"].str.upper().str.contains("REGIAO", na=False)
     
-    # ✅ NOVA FLAG: À Vista APENAS do Comercial (Regiões 1, 2, 3 e Diretoria)
-    regioes_comercial_avista = ["REGIAO 1", "REGIAO 2", "REGIAO 3", "DIRETORIA"]
+    # ✅ Comercial: REGIAO (qualquer uma) + DIRETORIA
+    df["_is_comercial"] = (
+        df["Regiao Vendedor"].str.upper().str.contains("REGIAO", na=False) | 
+        df["Regiao Vendedor"].str.upper().str.strip() == "DIRETORIA"
+    )
+    
+    # ✅ À Vista APENAS das Regiões 1, 2, 3 e Diretoria
     df["_is_comercial_avista"] = (
         df["_is_a_vista"] & 
-        df["Regiao Vendedor"].str.upper().str.strip().isin(regioes_comercial_avista)
+        (df["Regiao Vendedor"].str.upper().str.contains("REGIAO [123]", na=False, regex=True) | 
+         df["Regiao Vendedor"].str.upper().str.strip() == "DIRETORIA")
     )
     
     return {
         "total_geral":         df["Vlr. Nota"].sum(),
         "total_assistencia":   df[df["_is_assistencia"]]["Vlr. Nota"].sum(),
         "total_lojas":         df[df["_is_loja"]]["Vlr. Nota"].sum(),
-        
-        # ✅ ALTERAÇÃO: À Vista agora filtrado por regiões comerciais específicas
         "total_a_vista":       df[df["_is_comercial_avista"]]["Vlr. Nota"].sum(),
-        
         "total_boleto":        df[df["_is_boleto"]]["Vlr. Nota"].sum(),
+        
+        # ✅ Comercial = Regiões + Diretoria + Assistência
         "total_comercial":     df[(df["_is_comercial"]) | (df["_is_assistencia"])]["Vlr. Nota"].sum(),
+        
         "qtd_notas":           len(df),
     }, df
 
